@@ -176,14 +176,14 @@ class LineFollower(Node):
         right_sector = message.ranges[int(n * 7/18): int(n * 9/18)]
         left_sector = message.ranges[int(n * 9/18): int(n * 11/18)]
         sector= right_sector if min(right_sector)<min(left_sector) else left_sector
-		if min(sector)<0.8:
-			spd =min(sector)/0.8
-			self.obstacle_in_front=True
-			lowerbound=n*7/18 if sector==right_sector else n*9/18
-			angle=2/(18*(9*n/18-(sector.index(min(sector))+lowerbound)))
-		    self.rover_move_manual_mode(spd,angle)
+        if min(sector)<0.8:
+            spd =min(sector)/0.8
+            self.obstacle_in_front=True
+            lowerbound=n*7/18 if sector==right_sector else n*9/18
+            angle=2/(18*(9*n/18-(sector.index(min(sector))+lowerbound)))
+            self.rover_move_manual_mode(spd,angle)
         else:
-		    self.obstacle_in_front=False
+            self.obstacle_in_front=False
 
 		
         
