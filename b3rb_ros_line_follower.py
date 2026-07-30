@@ -131,34 +131,26 @@ class LineFollower(Node):
     # ------------------ Callback Implementations ------------------
 
     def edge_vectors_callback(self, message):
-        """
-        Receives lane boundaries from the camera vector extractor.
-        
-        GUIDELINE (Lane Following):
-        - `message.vector_count` contains the number of active bounds seen (0, 1, or 2).
-        - `message.vector_1` and `message.vector_2` contain the points defining the bounds.
-        - You need to write logic to compute the centerline deviation and adjust `self.target_turn`.
-        - E.g., if only one line is seen, steer away from it to keep distance; if two lines are seen,
-          calculate the midpoint relative to the image width and steer to center the buggy.
-        """
-        
-        if message.vector_count==1:
-            farpoint = message.vector_1[0] if len(message.vector_1) > 0 else message.vector_2[0]
-            x=message.image_width-farpoint[0]
-            angle=math.atan((x-message.image_width/2)/(message.image_height-farpoint[1]))/(PI/2)
-            spd=(message.image_height-farpoint[1])/message.image_height
-            self.rover_move_manual_mode(spd,angle)
-        if message.vector_count==2:
-            farpoint=[(message.vector_1[0].x+message.vector_2[0].x)/2,(message.vector_1[0].y+message.vector_2[0].y)/2]
-            angle=math.atan((farpoint[0]-message.image_width/2)/(message.image_height-farpoint[1]))/(PI/2)
-            spd=(message.image_height-farpoint[1])/message.image_height
-            self.rover_move_manual_mode(spd,angle)
+        if message.vector_count == 1:
+            farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
+            dx = farpoint.x - message.image_width / 2
+            dy = message.image_height - farpoint.y
+            if dy == 0:
+                return
+            angle = math.atan(dx / dy) / (PI / 2)
+            spd = dy / message.image_height
+            self.rover_move_manual_mode(spd, angle)
 
-        # HINTS:
-        # width = message.image_width
-        # half_width = width / 2.0
-        # For now, we do not modify self.target_turn so the buggy continues straight.
-        pass
+        elif message.vector_count == 2:
+            fx = (message.vector_1[0].x + message.vector_2[0].x) / 2
+            fy = (message.vector_1[0].y + message.vector_2[0].y) / 2
+            dx = fx - message.image_width / 2
+            dy = message.image_height - fy
+            if dy == 0:
+               return
+            angle = -math.atan(dx / dy) / (PI / 2)
+            spd = dy / message.image_height
+            self.rover_move_manual_mode(spd, angle)
 
     def lidar_callback(self, message):
         """
