@@ -143,7 +143,7 @@ class LineFollower(Node):
         """
         
         if message.vector_count==1:
-            farpoint = message.vector_1.[0] if len(message.vector_1) > 0 else message.vector_2[0]
+            farpoint = message.vector_1[0] if len(message.vector_1) > 0 else message.vector_2[0]
             x=message.image_width-farpoint[0]
             angle=math.atan((x-message.image_width/2)/(message.image_height-farpoint[1]))/(PI/2)
             spd=(message.image_height-farpoint[1])/message.image_height
@@ -175,12 +175,12 @@ class LineFollower(Node):
         n = len(message.ranges)
         right_sector = message.ranges[int(n * 7/18): int(n * 9/18)]
         left_sector = message.ranges[int(n * 9/18): int(n * 11/18)]
-		sector= right_sector if min(right_sector)<min(left_sector) else left_sector
+        sector= right_sector if min(right_sector)<min(left_sector) else left_sector
 		if min(sector)<0.8:
 			spd =min(sector)/0.8
 			self.obstacle_in_front=True
 			lowerbound=n*7/18 if sector==right_sector else n*9/18
-			angle=2/(18*(9*n/18-(sector.index_of(min(sector))+lowerbound)))
+			angle=2/(18*(9*n/18-(sector.index(min(sector))+lowerbound)))
 		    self.rover_move_manual_mode(spd,angle)
 
 		
