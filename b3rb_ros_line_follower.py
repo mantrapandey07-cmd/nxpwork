@@ -182,6 +182,8 @@ class LineFollower(Node):
 			lowerbound=n*7/18 if sector==right_sector else n*9/18
 			angle=2/(18*(9*n/18-(sector.index(min(sector))+lowerbound)))
 		    self.rover_move_manual_mode(spd,angle)
+        else:
+		    self.obstacle_in_front=False
 
 		
         
