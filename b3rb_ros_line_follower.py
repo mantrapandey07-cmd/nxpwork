@@ -143,7 +143,7 @@ class LineFollower(Node):
         """
         
         if message.vector_count==1:
-            farpoint=[(message.vector_1[0].x+message.vector_2[0].x)/2,(message.vector_1[0].y+message.vector_2[0].y)/2]
+            farpoint = message.vector_1[0] if len(message.vector_1) > 0 else message.vector_2[0]
             x=message.image_width-farpoint[0]
             angle=math.atan((x-message.image_width/2)/(message.image_height-farpoint[1]))/(PI/2)
             spd=(message.image_height-farpoint[1])/message.image_height
