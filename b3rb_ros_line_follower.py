@@ -110,6 +110,7 @@ class LineFollower(Node):
         self.hospital_id = None
         self.current_destination = None
         self.mission_completed = False
+        self.expconst=0.4
 
         # Timer to publish drive commands at 10Hz
         self.control_timer = self.create_timer(0.1, self.publish_drive_commands)
@@ -131,26 +132,27 @@ class LineFollower(Node):
     # ------------------ Callback Implementations ------------------
 
     def edge_vectors_callback(self, message):
-        if message.vector_count == 1:
-            farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
-            dx = farpoint.x - message.image_width / 2
-            dy = message.image_height - farpoint.y
-            if dy == 0:
-                return
-            angle = math.atan(dx / dy) / (PI / 2)
-            spd = dy / message.image_height
-            self.rover_move_manual_mode(spd, angle)
+        if not self.obstacle_in_front:
+            if message.vector_count == 1:
+                farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
+                dx = farpoint.x - message.image_width / 2
+                dy = message.image_height - farpoint.y
+                if dy == 0:
+                    return
+                angle = math.atan(dx / dy) / (PI / 2)
+                spd = dy*self.expconst/message.image_height +(1-self.expconst)*self.target_speed
+                self.rover_move_manual_mode(spd, angle)
 
-        elif message.vector_count == 2:
-            fx = (message.vector_1[0].x + message.vector_2[0].x) / 2
-            fy = (message.vector_1[0].y + message.vector_2[0].y) / 2
-            dx = fx - message.image_width / 2
-            dy = message.image_height - fy
-            if dy == 0:
-               return
-            angle = -math.atan(dx / dy) / (PI / 2)
-            spd = dy / message.image_height
-            self.rover_move_manual_mode(spd, angle)
+            elif message.vector_count == 2:
+                farx = (message.vector_1[0].x + message.vector_2[0].x) / 2
+                fary = (message.vector_1[0].y + message.vector_2[0].y) / 2
+                dx = farx - message.image_width / 2
+                dy = message.image_height - fary
+                if dy == 0:
+                    return
+                angle = -math.atan(dx / dy) / (PI / 2)
+                spd = dy*self.expconst/message.image_height +(1-self.expconst)*self.target_speed
+                self.rover_move_manual_mode(spd, angle)
 
     def lidar_callback(self, message):
         """
@@ -169,10 +171,10 @@ class LineFollower(Node):
         left_sector = message.ranges[int(n * 9/18): int(n * 11/18)]
         sector= right_sector if min(right_sector)<min(left_sector) else left_sector
         if min(sector)<0.8:
-            spd =min(sector)/0.8
+            spd =min(self.target_speed,min(sector)*self.expconst/0.8 +(1-self.expconst)*self.target_speed)
             self.obstacle_in_front=True
             lowerbound=n*7/18 if sector==right_sector else n*9/18
-            angle=2/(18*(9*n/18-(sector.index(min(sector))+lowerbound)))
+            angle=2*n/(18*(9*n/18-(sector.index(min(sector))+lowerbound))) if (9*n/18-(sector.index(min(sector))+lowerbound)) else 2*n/(18*(0.001))
             self.rover_move_manual_mode(spd,angle)
         else:
             self.obstacle_in_front=False
@@ -183,7 +185,7 @@ class LineFollower(Node):
 
     def server_communication_callback(self, message):
         """
-        Receives coordination commands from the server.
+        Receives 0coordination commands from the server.
         
         GUIDELINE (Server Communication):
         - Check if the message is destined for the Buggy (`message.dest == 1`).
