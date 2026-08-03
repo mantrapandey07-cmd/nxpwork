@@ -150,7 +150,8 @@ class LineFollower(Node):
                 dy = message.image_height - fary
                 if dy == 0:
                     return
-                angle = -math.atan(dx / dy) / (PI / 2)
+                ang = -math.atan(dx / dy) / (PI / 2)
+                angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
                 spd = dy*self.expconst/message.image_height +(1-self.expconst)*self.target_speed
                 self.rover_move_manual_mode(spd, angle)
 
@@ -174,7 +175,9 @@ class LineFollower(Node):
             spd =min(self.target_speed,min(sector)*self.expconst/0.8 +(1-self.expconst)*self.target_speed)
             self.obstacle_in_front=True
             lowerbound=n*7/18 if sector==right_sector else n*9/18
-            angle=2*n/(18*(9*n/18-(sector.index(min(sector))+lowerbound))) if (9*n/18-(sector.index(min(sector))+lowerbound)) else 2*n/(18*(0.001))
+            ang=2*n/(18*(9*n/18-(sector.index(min(sector))+lowerbound))) if (9*n/18-(sector.index(min(sector))+lowerbound)) else 2*n/(18*(0.001))
+            angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
+
             self.rover_move_manual_mode(spd,angle)
         else:
             self.obstacle_in_front=False
