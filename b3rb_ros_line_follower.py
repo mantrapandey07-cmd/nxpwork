@@ -115,6 +115,8 @@ class LineFollower(Node):
         self.expconst=0.4
         self.expconst2=0.2
         self.reached=False
+        self.direction=""
+        self.lost_count=0
 
 
         # Timer to publish drive commands at 10Hz
@@ -138,14 +140,19 @@ class LineFollower(Node):
 
     def edge_vectors_callback(self, message):
         if not self.avoid:
-            if message.vector_count == 1:
+            if message.vector_count==0:
+                self.lost_count = self.lost_count + 1
+                decay = min(10.0/self.lost_count, 1.0)
+                angle = self.expconst * decay + (1 - self.expconst) * self.target_turn
+            elif message.vector_count == 1:
                 farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
                 dx = farpoint.x - message.image_width / 2
+                
                 dy = message.image_height - farpoint.y
                 if dy == 0:
                     return
-                ang = math.atan(dx/dy) / (PI/2)
-                angle = self.expconst * ang + (1 - self.expconst) * self.target_turn if abs(ang)>0.3 else 0
+                ang = math.atan(dx/dy) / (PI/2) if math.atan(dx/dy) / (PI/2) > 0.2 else 0
+                angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
                 if not self.approaching:
                     speed=(1-abs(ang)*0.8)
 
