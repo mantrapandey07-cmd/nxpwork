@@ -114,7 +114,7 @@ class LineFollower(Node):
         self.qr_data=""
         self.expconst=0.4
         self.expconst2=0.2
-        self.reached=True
+        self.reached=False
 
 
         # Timer to publish drive commands at 10Hz
@@ -144,8 +144,8 @@ class LineFollower(Node):
                 dy = message.image_height - farpoint.y
                 if dy == 0:
                     return
-                ang = math.atan(dx / dy) / (PI / 2)
-                angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
+                ang = math.atan(dx/dy) / (PI/2)
+                angle = self.expconst * ang + (1 - self.expconst) * self.target_turn if abs(ang)>0.3 else 0
                 if not self.approaching:
                     speed=(1-abs(ang)*0.8)
 
@@ -293,6 +293,7 @@ class LineFollower(Node):
                     self.qr_data=message.data
             else: 
                 self.approaching=False
+                self.patient_id=0
         elif message.data.startswith("{LOC_HOSPITAL_"):
             self.hospital_id = int(message.data.strip("{}").split("_")[-1])
             self.get_logger().info(f"Identified Hospital: {self.hospital_id}")
@@ -305,6 +306,7 @@ class LineFollower(Node):
             else:
                 self.approaching = False
                 self.reached=False
+                self.hospital_id=0
         pass
 
     def sign_board_callback(self, message):
