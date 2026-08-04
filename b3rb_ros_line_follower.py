@@ -105,13 +105,16 @@ class LineFollower(Node):
         self.target_turn = 0.0
 
         # State variables (You can add your own state flags / state machines here)
-        self.obstacle_in_front = False
+        self.avoid = False
         self.patient_id = None
         self.hospital_id = None
-        self.current_destination = None
+        self.destination = None
         self.mission_completed = False
+        self.approaching=False
+        self.qr_data=""
         self.expconst=0.4
         self.expconst2=0.2
+        self.reached=True
 
 
         # Timer to publish drive commands at 10Hz
@@ -134,7 +137,7 @@ class LineFollower(Node):
     # ------------------ Callback Implementations ------------------
 
     def edge_vectors_callback(self, message):
-        if not self.obstacle_in_front:
+        if not self.avoid:
             if message.vector_count == 1:
                 farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
                 dx = farpoint.x - message.image_width / 2
@@ -143,9 +146,12 @@ class LineFollower(Node):
                     return
                 ang = math.atan(dx / dy) / (PI / 2)
                 angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
-                speed=(1-abs(ang)*0.8)
+                if not self.approaching:
+                    speed=(1-abs(ang)*0.8)
 
-                spd = speed*self.expconst +(1-self.expconst)*self.target_speed
+                    spd = speed*self.expconst +(1-self.expconst)*self.target_speed
+                else:
+                    spd=self.target_speed
                 self.rover_move_manual_mode(spd, angle)
 
             elif message.vector_count == 2:
@@ -157,8 +163,11 @@ class LineFollower(Node):
                     return
                 ang = math.atan(dx / dy) / (PI / 2)
                 angle = -self.expconst2 * ang + (1 - self.expconst2) * self.target_turn
-                speed=(1-abs(ang)*0.8)
-                spd = speed*self.expconst2 +(1-self.expconst2)*self.target_speed
+                if not self.approaching:
+                    speed=(1-abs(ang)*0.8)
+                    spd = speed*self.expconst2 +(1-self.expconst2)*self.target_speed
+                else:
+                    spd=self.target_speed
                 self.rover_move_manual_mode(spd, angle)
 
     def lidar_callback(self, message):
@@ -177,22 +186,43 @@ class LineFollower(Node):
         right_sector = message.ranges[int(n * 7/18): int(n * 9/18)]
         left_sector = message.ranges[int(n * 9/18): int(n * 11/18)]
         sector= right_sector if min(right_sector)<min(left_sector) else left_sector
-        if min(sector)<0.8:
-            spd =min(self.target_speed,min(sector)*self.expconst/0.8 +(1-self.expconst)*self.target_speed)
-            self.obstacle_in_front=True
-            if sector==right_sector :
-                lowerbound=n*7/18
-            else :
-                lowerbound=n*9/18
-            offset=(9*n/18-(sector.index(min(sector))+lowerbound))
-            if offset!=0:
-                ang=(1-abs(offset)/(2*n/18))*(abs(offset)/offset)
-            else : ang= 2*n/(18*(0.001)) if lowerbound==n*7/18 else -2*n/(18*(0.001))
-            angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
+        if not self.approaching:
+            if min(sector)<0.8:
+                spd =min(self.target_speed,min(sector)*self.expconst/0.8 +(1-self.expconst)*self.target_speed)
+                self.avoid=True
+                if sector==right_sector :
+                    lowerbound=n*7/18
+                else :
+                    lowerbound=n*9/18
+                offset=(9*n/18-(sector.index(min(sector))+lowerbound))
+                if offset!=0:
+                    ang=(1-abs(offset)/(2*n/18))*(abs(offset)/offset)
+                else : ang= 2*n/(18*(0.001)) if lowerbound==n*7/18 else -2*n/(18*(0.001))
+                angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
 
-            self.rover_move_manual_mode(spd,angle)
+                self.rover_move_manual_mode(spd,angle)
+            else:
+                self.avoid=False
         else:
-            self.obstacle_in_front=False
+            left_part = message.ranges[int(n*10/18):int(n*14/18)]
+            right_part = message.ranges[int(n*4/18):int(n*8/18)]
+            min_left, min_right = min(left_part), min(right_part)
+            if min(min_left, min_right) < 3:
+                if min_left < min_right:
+                    idx = int(n*10/18) + left_part.index(min_left)
+                else:
+                    idx = int(n*4/18) + right_part.index(min_right)
+                    offset = (n/2 - idx) / (4*n/18)
+                    spd=self.target_speed*(1-abs(offset))
+                    self.rover_move_manual_mode(spd, self.target_turn)
+     
+
+                if self.target_speed<0.15:
+                    self.target_speed=0
+                    self.approaching=False
+                    self.reached=True
+
+        
 
 		
         
@@ -209,10 +239,27 @@ class LineFollower(Node):
         - Parse server instructions (e.g., patient pickup, target hospitals).
         - Call `self.send_server_update` to report your status when you reach a checkpoint.
         """
+
         if message.dest == 1:
             self.get_logger().info(f"Received Server Message: {message.msg}")
-            # Parse payload and update state machine destination/objectives here
-            pass
+            self.destination=message.msg
+
+                
+            if message.ack==1:
+                self.qr_data=""
+                self.patient_id=0
+                self.hospital_id=0
+                
+        if self.reached:
+            if self.patient_id in [1,2,3]:
+                self.send_server_update(self.qr_data)
+            if self.hospital_id in [1,2,3]:
+                self.send_server_update(self.qr_data)
+            if self.hospital_id==3:
+                self.mission_completed=1
+
+
+            
 
     def send_server_update(self, text_msg):
         """Sends status messages to the server. (Do not forget to send ACK messages to server)"""
@@ -220,7 +267,7 @@ class LineFollower(Node):
         server_msg.src = 1       # Source component: Buggy-1
         server_msg.dest = 2      # Destination component: Server-2
         server_msg.uid = 100     # Replace with a rolling message ID/counter
-        server_msg.ack = 0
+        server_msg.ack = 1
         server_msg.msg = text_msg
         self.publisher_server.publish(server_msg)
 
@@ -234,6 +281,30 @@ class LineFollower(Node):
           perform the action (pick patient / drop patient), and communicate the arrival to the server.
         """
         self.get_logger().info(f"Heard QR code: {message.data}")
+        map1={"X":1,"Y":2,"Z":3}
+        map2={"A":1,"B":2,"C":3}
+        if message.data.startswith("{LOC_PATIENT_"):
+            self.patient_id = int(message.data.strip("{}").split("_")[-1])
+            self.get_logger().info(f"Identified Patient: {self.patient_id}")
+            if self.destination in ["A","B","C"]:
+                if self.patient_id==map2[self.destination]:
+                    self.get_logger().info(f"Approaching target patient location: {self.patient_id}")
+                    self.approaching = True
+                    self.qr_data=message.data
+            else: 
+                self.approaching=False
+        elif message.data.startswith("{LOC_HOSPITAL_"):
+            self.hospital_id = int(message.data.strip("{}").split("_")[-1])
+            self.get_logger().info(f"Identified Hospital: {self.hospital_id}")
+            
+            if self.destination in ["X","Y","Z"]:
+                if self.hospital_id==map1[self.destination]:
+                    self.get_logger().info(f"Approaching target hospital location: {self.hospital_id}")
+                    self.approaching = True
+                    self.qr_data=message.data
+            else:
+                self.approaching = False
+                self.reached=False
         pass
 
     def sign_board_callback(self, message):
@@ -244,6 +315,7 @@ class LineFollower(Node):
         - Use the detected signs to choose the quickest route at intersections.
         """
         self.get_logger().info(f"Heard Sign Board: {message.data}")
+
         pass
 
 def main(args=None):
