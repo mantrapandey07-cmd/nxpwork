@@ -144,7 +144,7 @@ class LineFollower(Node):
                 self.lost_count = self.lost_count + 1
                 decay = min(self.lost_count/10, 1.0)
                 angle = self.expconst * decay + (1 - self.expconst) * self.target_turn
-                self.rover_move_manual_mode(self.target_turn, angle)
+                self.rover_move_manual_mode(spd, angle)
             elif message.vector_count == 1:
                 farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
                 dx = farpoint.x - message.image_width / 2
@@ -160,6 +160,7 @@ class LineFollower(Node):
                     spd = speed*self.expconst +(1-self.expconst)*self.target_speed
                 else:
                     spd=self.target_speed
+                self.lost_count=0
                 self.rover_move_manual_mode(spd, angle)
 
             elif message.vector_count == 2:
@@ -176,6 +177,7 @@ class LineFollower(Node):
                     spd = speed*self.expconst2 +(1-self.expconst2)*self.target_speed
                 else:
                     spd=self.target_speed
+                    self.lost_count=0
                 self.rover_move_manual_mode(spd, angle)
 
     def lidar_callback(self, message):
@@ -298,6 +300,8 @@ class LineFollower(Node):
                 if self.patient_id==map2[self.destination]:
                     self.get_logger().info(f"Approaching target patient location: {self.patient_id}")
                     self.approaching = True
+                    self.approaching = True
+                    self.avoid = False
                     self.qr_data=message.data
             else: 
                 self.approaching=False
@@ -311,6 +315,7 @@ class LineFollower(Node):
                     self.get_logger().info(f"Approaching target hospital location: {self.hospital_id}")
                     self.approaching = True
                     self.qr_data=message.data
+                    self.avoid = False
             else:
                 self.approaching = False
                 self.reached=False
