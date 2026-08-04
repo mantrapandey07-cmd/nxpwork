@@ -111,6 +111,8 @@ class LineFollower(Node):
         self.current_destination = None
         self.mission_completed = False
         self.expconst=0.4
+        self.expconst2=0.2
+
 
         # Timer to publish drive commands at 10Hz
         self.control_timer = self.create_timer(0.1, self.publish_drive_commands)
@@ -139,8 +141,11 @@ class LineFollower(Node):
                 dy = message.image_height - farpoint.y
                 if dy == 0:
                     return
-                angle = math.atan(dx / dy) / (PI / 2)
-                spd = dy*self.expconst/message.image_height +(1-self.expconst)*self.target_speed
+                ang = math.atan(dx / dy) / (PI / 2)
+                angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
+                speed=(1-abs(ang)*0.8)
+
+                spd = speed*self.expconst +(1-self.expconst)*self.target_speed
                 self.rover_move_manual_mode(spd, angle)
 
             elif message.vector_count == 2:
@@ -150,9 +155,10 @@ class LineFollower(Node):
                 dy = message.image_height - fary
                 if dy == 0:
                     return
-                ang = -math.atan(dx / dy) / (PI / 2)
-                angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
-                spd = dy*self.expconst/message.image_height +(1-self.expconst)*self.target_speed
+                ang = math.atan(dx / dy) / (PI / 2)
+                angle = -self.expconst2 * ang + (1 - self.expconst2) * self.target_turn
+                speed=(1-abs(ang)*0.8)
+                spd = speed*self.expconst2 +(1-self.expconst2)*self.target_speed
                 self.rover_move_manual_mode(spd, angle)
 
     def lidar_callback(self, message):
@@ -174,8 +180,14 @@ class LineFollower(Node):
         if min(sector)<0.8:
             spd =min(self.target_speed,min(sector)*self.expconst/0.8 +(1-self.expconst)*self.target_speed)
             self.obstacle_in_front=True
-            lowerbound=n*7/18 if sector==right_sector else n*9/18
-            ang=2*n/(18*(9*n/18-(sector.index(min(sector))+lowerbound))) if (9*n/18-(sector.index(min(sector))+lowerbound)) else 2*n/(18*(0.001))
+            if sector==right_sector :
+                lowerbound=n*7/18
+            else :
+                lowerbound=n*9/18
+            offset=(9*n/18-(sector.index(min(sector))+lowerbound))
+            if offset!=0:
+                ang=(1-abs(offset)/(2*n/18))*(abs(offset)/offset)
+            else : ang= 2*n/(18*(0.001)) if lowerbound==n*7/18 else -2*n/(18*(0.001))
             angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
 
             self.rover_move_manual_mode(spd,angle)
