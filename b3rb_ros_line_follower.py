@@ -142,8 +142,9 @@ class LineFollower(Node):
         if not self.avoid:
             if message.vector_count==0:
                 self.lost_count = self.lost_count + 1
-                decay = min(10.0/self.lost_count, 1.0)
+                decay = min(self.lost_count/10, 1.0)
                 angle = self.expconst * decay + (1 - self.expconst) * self.target_turn
+                self.rover_move_manual_mode(self.target_turn, angle)
             elif message.vector_count == 1:
                 farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
                 dx = farpoint.x - message.image_width / 2
@@ -151,7 +152,7 @@ class LineFollower(Node):
                 dy = message.image_height - farpoint.y
                 if dy == 0:
                     return
-                ang = math.atan(dx/dy) / (PI/2) if math.atan(dx/dy) / (PI/2) > 0.2 else 0
+                ang = math.atan(dx/dy) / (PI/2) if abs(math.atan(dx/dy) / (PI/2)) > 0.2 else 0
                 angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
                 if not self.approaching:
                     speed=(1-abs(ang)*0.8)
@@ -204,7 +205,7 @@ class LineFollower(Node):
                 offset=(9*n/18-(sector.index(min(sector))+lowerbound))
                 if offset!=0:
                     ang=(1-abs(offset)/(2*n/18))*(abs(offset)/offset)
-                else : ang= 2*n/(18*(0.001)) if lowerbound==n*7/18 else -2*n/(18*(0.001))
+                else : ang= 0.1 if lowerbound==n*7/18 else -0.1
                 angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
 
                 self.rover_move_manual_mode(spd,angle)
