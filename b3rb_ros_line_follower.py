@@ -356,14 +356,16 @@ class LineFollower(Node):
         candidates = [e for e in entries if e[0] in ("Left", "Right", "Straight")]
         if not candidates:
             return
-		if desentry == None:		#error handling for none case
-			self.get_logger().info(f"Destination '{self.destination}' not found in sign board")
-			return
+        if destentry is None:  # error handling for none case
+            self.get_logger().info(f"Destination '{self.destination}' not found in sign board")
+            return
         nearest = min(candidates, key=lambda e: abs(e[1] - destentry[1]))
         if abs(nearest[1] - destentry[1]) < 0.1: 
             self.direction = nearest[0]
             if self.direction in ['Left','Right']:
-                self.override_till=self.get_clock().now().nanoseconds*(10**(-9))+self.override_dur
+                # convert nanoseconds to seconds and add override duration
+                now_sec = self.get_clock().now().nanoseconds * 1e-9
+                self.override_till = now_sec + self.override_dur
                 
 
         pass
