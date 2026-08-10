@@ -349,13 +349,16 @@ class LineFollower(Node):
         for e in message.data.split(";"):
             parts = e.split(":")
             entries.append([parts[0], float(parts[1])])
-        destentry=None
+        destentry=None 
         for e in entries :
             if e[0]==self.destination: destentry= e 
         
         candidates = [e for e in entries if e[0] in ("Left", "Right", "Straight")]
         if not candidates:
             return
+		if desentry == None:		#error handling for none case
+			self.get_logger().info(f"Destination '{self.destination}' not found in sign board")
+			return
         nearest = min(candidates, key=lambda e: abs(e[1] - destentry[1]))
         if abs(nearest[1] - destentry[1]) < 0.1: 
             self.direction = nearest[0]
