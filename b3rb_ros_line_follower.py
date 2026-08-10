@@ -352,12 +352,12 @@ class LineFollower(Node):
         entries=[]
         for e in message.data.split(";"):
             parts = e.split(":")
-            entries.append([parts[0], float(parts[1])])
+            entries.append([parts[0], float(parts[1])]) #entries is [[A,dist],[B,dist]]
         destentry=None 
         for e in entries :
             if e[0]==self.destination:
                 destentry= e 
-                self.get_logger().info("DESENTRY IS " + destentry)
+                self.get_logger().info("DESENTRY IS "  + str(destentry))
         
         candidates = [e for e in entries if e[0] in ("Left", "Right", "Straight")]
         if not candidates:
