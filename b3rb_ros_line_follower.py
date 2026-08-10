@@ -163,7 +163,7 @@ class LineFollower(Node):
             if dy == 0:
                 return
             ang = math.atan(dx/dy) / (PI/2) if abs(math.atan(dx/dy) / (PI/2)) > 0.2 else 0
-            angle = -self.expconst * ang + (1 - self.expconst) * self.target_turn
+            angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
             if not self.approaching:
                 speed=(1-abs(ang)*0.8)
 
