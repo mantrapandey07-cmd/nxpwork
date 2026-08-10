@@ -117,6 +117,10 @@ class LineFollower(Node):
         self.reached=False
         self.direction=""
         self.lost_count=0
+        self.ackno=0
+        self.override_till=0
+        self.override_dur=1.5
+
 
 
         # Timer to publish drive commands at 10Hz
@@ -139,46 +143,52 @@ class LineFollower(Node):
     # ------------------ Callback Implementations ------------------
 
     def edge_vectors_callback(self, message):
-        if not self.avoid:
-            if message.vector_count==0:
-                self.lost_count = self.lost_count + 1
-                decay = min(self.lost_count/10, 1.0)
-                angle = self.expconst * decay + (1 - self.expconst) * self.target_turn
-                self.rover_move_manual_mode(self.target_speed, angle)
-            elif message.vector_count == 1:
-                farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
-                dx = farpoint.x - message.image_width / 2
-                
-                dy = message.image_height - farpoint.y
-                if dy == 0:
-                    return
-                ang = math.atan(dx/dy) / (PI/2) if abs(math.atan(dx/dy) / (PI/2)) > 0.2 else 0
-                angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
-                if not self.approaching:
-                    speed=(1-abs(ang)*0.8)
+        if self.avoid:
+            return
+        if self.get_clock().now().nanoseconds*(10**(-9))<self.override_till :
+            ang=0.7 if self.direction == "Left" else -0.7
+            self.target_turn = self.expconst *ang + (1 - self.expconst) * self.target_turn
+            self.target_speed = max(self.target_speed * 0.7, 0.15)
+            return
+        if message.vector_count==0:
+            self.lost_count = self.lost_count + 1
+            decay = min(self.lost_count/10, 1.0)
+            angle = self.expconst * decay + (1 - self.expconst) * self.target_turn
+            self.rover_move_manual_mode(self.target_speed, angle)
+        elif message.vector_count == 1:
+            farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
+            dx = farpoint.x - message.image_width / 2
+            
+            dy = message.image_height - farpoint.y
+            if dy == 0:
+                return
+            ang = math.atan(dx/dy) / (PI/2) if abs(math.atan(dx/dy) / (PI/2)) > 0.2 else 0
+            angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
+            if not self.approaching:
+                speed=(1-abs(ang)*0.8)
 
-                    spd = speed*self.expconst +(1-self.expconst)*self.target_speed
-                else:
-                    spd=self.target_speed
-                self.lost_count=0
-                self.rover_move_manual_mode(spd, angle)
+                spd = speed*self.expconst +(1-self.expconst)*self.target_speed
+            else:
+                spd=self.target_speed
+            self.lost_count=0
+            self.rover_move_manual_mode(spd, angle)
 
-            elif message.vector_count == 2:
-                farx = (message.vector_1[0].x + message.vector_2[0].x) / 2
-                fary = (message.vector_1[0].y + message.vector_2[0].y) / 2
-                dx = farx - message.image_width / 2
-                dy = message.image_height - fary
-                if dy == 0:
-                    return
-                ang = math.atan(dx / dy) / (PI / 2)
-                angle = -self.expconst2 * ang + (1 - self.expconst2) * self.target_turn
-                if not self.approaching:
-                    speed=(1-abs(ang)*0.8)
-                    spd = speed*self.expconst2 +(1-self.expconst2)*self.target_speed
-                else:
-                    spd=self.target_speed
-                    self.lost_count=0
-                self.rover_move_manual_mode(spd, angle)
+        elif message.vector_count == 2:
+            farx = (message.vector_1[0].x + message.vector_2[0].x) / 2
+            fary = (message.vector_1[0].y + message.vector_2[0].y) / 2
+            dx = farx - message.image_width / 2
+            dy = message.image_height - fary
+            if dy == 0:
+                return
+            ang = math.atan(dx / dy) / (PI / 2)
+            angle = -self.expconst2 * ang + (1 - self.expconst2) * self.target_turn
+            if not self.approaching:
+                speed=(1-abs(ang)*0.8)
+                spd = speed*self.expconst2 +(1-self.expconst2)*self.target_speed
+            else:
+                spd=self.target_speed
+            self.lost_count=0
+            self.rover_move_manual_mode(spd, angle)
 
     def lidar_callback(self, message):
         """
@@ -220,6 +230,9 @@ class LineFollower(Node):
             if min(min_left, min_right) < 3:
                 if min_left < min_right:
                     idx = int(n*10/18) + left_part.index(min_left)
+                    offset = (n/2 - idx) / (4*n/18)
+                    spd=self.target_speed*(1-abs(offset))
+                    self.rover_move_manual_mode(spd, self.target_turn)
                 else:
                     idx = int(n*4/18) + right_part.index(min_right)
                     offset = (n/2 - idx) / (4*n/18)
@@ -249,10 +262,11 @@ class LineFollower(Node):
         - Parse server instructions (e.g., patient pickup, target hospitals).
         - Call `self.send_server_update` to report your status when you reach a checkpoint.
         """
-
+        
         if message.dest == 1:
             self.get_logger().info(f"Received Server Message: {message.msg}")
             self.destination=message.msg
+            self.ackno=1
 
                 
             if message.ack==1:
@@ -277,9 +291,10 @@ class LineFollower(Node):
         server_msg.src = 1       # Source component: Buggy-1
         server_msg.dest = 2      # Destination component: Server-2
         server_msg.uid = 100     # Replace with a rolling message ID/counter
-        server_msg.ack = 1
+        server_msg.ack = self.ackno
         server_msg.msg = text_msg
         self.publisher_server.publish(server_msg)
+        self.ackno=0
 
     def qr_detection_callback(self, message):
         """
@@ -330,6 +345,23 @@ class LineFollower(Node):
         - Use the detected signs to choose the quickest route at intersections.
         """
         self.get_logger().info(f"Heard Sign Board: {message.data}")
+        entries=[]
+        for e in message.data.split(";"):
+            parts = e.split(":")
+            entries.append([parts[0], float(parts[1])])
+        destentry=None
+        for e in entries :
+            if e[0]==self.destination: destentry= e 
+        
+        candidates = [e for e in entries if e[0] in ("Left", "Right", "Straight")]
+        if not candidates:
+            return
+        nearest = min(candidates, key=lambda e: abs(e[1] - destentry[1]))
+        if abs(nearest[1] - destentry[1]) < 0.1: 
+            self.direction = nearest[0]
+            if self.direction in ['Left','Right']:
+                self.override_till=self.get_clock().now().nanoseconds*(10**(-9))+self.override_dur
+                
 
         pass
 
