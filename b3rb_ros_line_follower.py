@@ -240,10 +240,11 @@ class LineFollower(Node):
                     self.rover_move_manual_mode(spd, self.target_turn)
      
 
-                if self.target_speed<0.15:
-                    self.target_speed=0
-                    self.approaching=False
-                    self.reached=True
+                if min(min_left, min_right) < 2:
+    				self.target_speed = 0.0
+    				self.target_turn = 0.0
+    				self.reached = True
+					self.get_logger().info("REACHED THE HOSPITAL")
 
         
 
