@@ -120,6 +120,7 @@ class LineFollower(Node):
         self.ackno=0
         self.override_till=0
         self.override_dur=1.5
+        self.STOP_dist=1.5
 
 
 
@@ -240,7 +241,7 @@ class LineFollower(Node):
                     self.rover_move_manual_mode(spd, self.target_turn)
      
 
-                if self.target_speed<0.15:
+                if min(min_left, min_right) < 3:
                     self.target_speed=0
                     self.approaching=False
                     self.reached=True
@@ -354,7 +355,7 @@ class LineFollower(Node):
             if e[0]==self.destination: destentry= e 
         
         candidates = [e for e in entries if e[0] in ("Left", "Right", "Straight")]
-        if not candidates:
+        if (not candidates) or ( destentry is None):
             return
         nearest = min(candidates, key=lambda e: abs(e[1] - destentry[1]))
         if abs(nearest[1] - destentry[1]) < 0.1: 
