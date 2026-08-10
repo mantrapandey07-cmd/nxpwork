@@ -115,7 +115,7 @@ class LineFollower(Node):
         self.expconst=0.4
         self.expconst2=0.2
         self.reached=False
-        self.direction=""
+        self.direction="Right"
         self.lost_count=0
         self.ackno=0
         self.override_till=0
