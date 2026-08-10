@@ -241,10 +241,11 @@ class LineFollower(Node):
      
 
                 if min(min_left, min_right) < 2:
-    				self.target_speed = 0.0
-    				self.target_turn = 0.0
-    				self.reached = True
-					self.get_logger().info("REACHED THE HOSPITAL")
+
+                    self.target_speed = 0.0
+                    self.target_turn = 0.0
+                    self.reached = True
+                    self.get_logger().info("REACHED THE HOSPITAL")
 
         
 
@@ -316,7 +317,9 @@ class LineFollower(Node):
                 if self.patient_id==map2[self.destination]:
                     self.get_logger().info(f"Approaching target patient location: {self.patient_id}")
                     self.approaching = True
-					#THIS COULD BE NEEDED self.target_speed = 0.2
+
+                    # THIS COULD BE NEEDED
+                    # self.target_speed = 0.2
                     self.avoid = False
                     self.qr_data=message.data
             else: 
