@@ -112,8 +112,8 @@ class LineFollower(Node):
         self.mission_completed = False
         self.approaching=False
         self.qr_data=""
-        self.expconst=0.4
-        self.expconst2=0.2
+        self.expconst=0.8 #earlier 0.4
+        self.expconst2=0.8 #earlier it was 0.2
         self.reached=False
         self.direction=""
         self.lost_count=0
