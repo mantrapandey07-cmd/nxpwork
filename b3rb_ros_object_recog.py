@@ -12,51 +12,50 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import json
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
 import cv2
 import numpy as np
+import os
+from ultralytics import YOLO
 
+# HINT: TensorFlow/Keras can be heavy and might not be installed by default.
+# We wrap the import in a try-except block so the node runs even if TensorFlow is missing.
+# Install it using: pip install tensorflow
 try:
-    from ultralytics import YOLO
+    import tensorflow as tf
 except ImportError:
-    YOLO = None
+    tf = None
 
 class ObjectRecognizer(Node):
     """
-    ROS 2 Node that processes raw camera images to recognize traffic sign
-    boards using an Ultralytics YOLO model.
-    It dynamically maps letters to directions and publishes the JSON layout.
+    ROS 2 Node that processes raw camera images to recognize traffic sign boards.
+    It publishes the detected sign type/labels on the `/sign_board_detection` topic.
     """
     def __init__(self):
         super().__init__('object_recognizer')
 
+        # Subscription for camera images.
         self.subscription_camera = self.create_subscription(
             CompressedImage,
             '/camera/image_raw/compressed',
             self.camera_image_callback,
             10)
 
+        # Publisher for sign board detection results.
         self.publisher_sign = self.create_publisher(
             String,
             '/sign_board_detection',
             10)
 
-        self.publisher_debug = self.create_publisher(
-            CompressedImage,
-            '/debug_images/sign_detection',
-            10)
-
-        self.model = None
-        if YOLO is not None:
+        # Attempt to load the pre-trained Keras model (model.h5) located in the same directory.
+        self.model = None 
+        if tf is not None:
             try:
                 dir_path = os.path.dirname(os.path.abspath(__file__))
-                model_path = os.path.join(dir_path, 'best.pt')
-                
+                model_path = os.path.join(dir_path, 'model.pt')
                 if os.path.exists(model_path):
                     self.model = YOLO(model_path)
                     self.get_logger().info(f"Loaded YOLO model from {model_path}")
@@ -65,85 +64,62 @@ class ObjectRecognizer(Node):
             except Exception as e:
                 self.get_logger().error(f"Failed to load YOLO model: {e}")
         else:
-            self.get_logger().warn("Ultralytics is not installed. Please install it using: pip install ultralytics")
+            self.get_logger().warn("TensorFlow is not installed. Running in CV/Placeholder mode.")
 
         self.get_logger().info("Object Recognizer Node started. Waiting for images...")
 
     def camera_image_callback(self, message):
-        """Processes incoming camera frames to classify traffic signs and publishes results."""
+        """Processes incoming camera frames to classify traffic signs."""
+        # Convert compressed image message to OpenCV format
         np_arr = np.frombuffer(message.data, np.uint8)
         image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        
-        if image is None:
-            return
 
-        # Get the JSON map and the annotated debug image
-        board_map_json, debug_img = self.classify_sign(image)
+        sign_detected = self.classify_sign(image)
 
-        if board_map_json is not None:
+        if sign_detected is not None:
             msg = String()
-            msg.data = board_map_json
+            msg.data = sign_detected
             self.publisher_sign.publish(msg)
-            self.get_logger().info(f"Published Board Layout: {board_map_json}")
+            self.get_logger().info(f"Detected Sign Board: {sign_detected}")
 
-        # Publish the annotated debug frame viewable in Foxglove
-        if debug_img is not None:
-            debug_msg = CompressedImage()
-            _, encoded = cv2.imencode('.jpg', debug_img)
-            debug_msg.format = "jpeg"
-            debug_msg.data = encoded.tobytes()
-            self.publisher_debug.publish(debug_msg)
-            
     def classify_sign(self, image):
-        """Runs YOLO inference and geometrically pairs letters with arrows."""
         if self.model is None:
-            return None, image
+            return None
+
+        h, w = image.shape[:2]
+        edge_margin = 5  
 
         try:
-            # Run inference directly with Ultralytics
-            # imgsz=320 keeps performance optimized for the Raspberry Pi
-            results = self.model.predict(source=image, imgsz=320, conf=0.55, verbose=False)
+            results = self.model.predict(image, verbose=False)
         except Exception as e:
             self.get_logger().debug(f"Inference failed: {e}")
-            return None, image
+            return None
 
-        # Generate Ultralytics annotated image automatically
-        annotated_img = results[0].plot() if len(results) > 0 else image
+        if not results or len(results[0].boxes) == 0:
+            return None
 
-        if len(results) == 0 or len(results[0].boxes) == 0:
-            return None, annotated_img
+        detections = []
+        for box in results[0].boxes:
+            conf = float(box.conf[0])
+            if conf < 0.5:          
+                continue
 
-        boxes = results[0].boxes
-        letters = []
-        arrows = []
-        
-        # Parse all detected bounding boxes
-        for i in range(len(boxes)):
-            box = boxes[i]
-            cls_id = int(box.cls[0])
-            label = results[0].names[cls_id]
-            
-            # Get coordinates to calculate horizontal center (x-axis)
             x1, y1, x2, y2 = box.xyxy[0].tolist()
-            box_cx = (x1 + x2) / 2.0
-            
-            if label in ['Left', 'Right', 'Straight']:
-                arrows.append((label, box_cx))
-            else:
-                letters.append((label, box_cx))
-                
-        # If we don't see both parts of the sign, we can't make a safe decision
-        if not letters or not arrows:
-            return None, annotated_img
-            
-        # Match each letter to the arrow directly underneath it (closest X-center)
-        board_map = {}
-        for l_label, l_cx in letters:
-            closest_arrow = min(arrows, key=lambda a: abs(a[1] - l_cx))
-            board_map[l_label] = closest_arrow[0]
-            
-        return json.dumps(board_map), annotated_img
 
+           
+            if x1 <= edge_margin or y1 <= edge_margin or \
+            x2 >= (w - edge_margin) or y2 >= (h - edge_margin):
+                continue
+
+            label = self.model.names[int(box.cls[0])]
+            x_center_norm = ((x1 + x2) / 2) / w   
+
+            detections.append(f"{label}:{x_center_norm:.3f}")
+
+        if not detections:
+            return None
+
+        return ";".join(detections)   
 def main(args=None):
     rclpy.init(args=args)
     node = ObjectRecognizer()
@@ -157,4 +133,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-    
