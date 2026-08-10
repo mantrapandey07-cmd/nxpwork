@@ -108,7 +108,7 @@ class LineFollower(Node):
         self.avoid = False
         self.patient_id = None
         self.hospital_id = None
-        self.destination = None
+        self.destination = "A"
         self.mission_completed = False
         self.approaching=False
         self.qr_data=""
@@ -355,7 +355,9 @@ class LineFollower(Node):
             entries.append([parts[0], float(parts[1])])
         destentry=None 
         for e in entries :
-            if e[0]==self.destination: destentry= e 
+            if e[0]==self.destination:
+                destentry= e 
+                self.get_logger().info("DESENTRY IS " + destentry)
         
         candidates = [e for e in entries if e[0] in ("Left", "Right", "Straight")]
         if not candidates:
