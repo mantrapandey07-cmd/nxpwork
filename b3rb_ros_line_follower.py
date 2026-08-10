@@ -115,7 +115,7 @@ class LineFollower(Node):
         self.expconst=0.4
         self.expconst2=0.2
         self.reached=False
-        self.direction="Right"
+        self.direction=""
         self.lost_count=0
         self.ackno=0
         self.override_till=0
@@ -231,7 +231,7 @@ class LineFollower(Node):
                 if min_left < min_right:
                     idx = int(n*10/18) + left_part.index(min_left)
                     offset = (n/2 - idx) / (4*n/18)
-                    spd=self.target_speed*(1-abs(offset))
+                    spd=self.target_speed*(1-abs(offset)) if self.target_speed*(1-abs(offset))<0.2 else 0
                     self.rover_move_manual_mode(spd, self.target_turn)
                 else:
                     idx = int(n*4/18) + right_part.index(min_right)
@@ -361,6 +361,7 @@ class LineFollower(Node):
             self.direction = nearest[0]
             if self.direction in ['Left','Right']:
                 self.override_till=self.get_clock().now().nanoseconds*(10**(-9))+self.override_dur
+
                 
 
         pass
