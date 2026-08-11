@@ -309,6 +309,11 @@ class LineFollower(Node):
     # Edge-vector / lane following
     # ======================================================================
 
+    def speed_from_turn(self, turn: float) -> float:
+        reduction = MAX_TURN_SPEED_REDUCTION * min(abs(turn), 1.0)
+
+        return max(0.07, BASE_SPEED * (1.0 - reduction))
+
     def edge_vectors_callback(self, message: EdgeVectors) -> None:
         """
         Update lane geometry and the navigation mode.
