@@ -51,6 +51,15 @@ TURN_MAX_TIME = 2.5
 CENTER_RETURN_BLEND = 0.12
 CENTER_RETURN_FRAMES = 12
 
+# ---------------------------------------------------------------------------
+# DEBUG
+# ---------------------------------------------------------------------------
+# Flip to False to silence the state-machine trace once you've diagnosed
+# the issue. Every DEBUG_LOG line below is new -- search "DEBUG_LOG" to find
+# every logging statement added for this fix.
+DEBUG_LOG = True
+DEBUG_LOG_EVERY_N_EDGE_CALLBACKS = 5   # throttle the high-rate edge trace
+
 # CONFIGURATION:
 # The buggy is driven in manual mode by publishing standard controller Joy messages to /cerebri/in/joy.
 # The layout is: msg.axes = [0.0, speed, 0.0, turn]
@@ -157,6 +166,12 @@ class LineFollower(Node):
         self.turn_complete_count = 0
         self.return_count = 0
 
+        # DEBUG_LOG: bookkeeping for throttled trace + change-only logging.
+        self._dbg_edge_call_count = 0
+        self._dbg_last_lane_mode = self.lane_mode
+        self._dbg_last_avoid = self.avoid
+        self._dbg_last_stick_side = self.stick_side
+
 
 
         # Timer to publish drive commands at 10Hz
@@ -188,7 +203,31 @@ class LineFollower(Node):
         line follower until the selected edge actually bends at the
         intersection.
         """
-        if self.avoid:
+        # --------------------------------------------------------------
+        # FIX #1 (root cause of "detected Right but still went Left"):
+        # Previously `if self.avoid: return` bypassed the ENTIRE turn state
+        # machine (STICK/TURNING/RETURN_CENTER) any time lidar_callback set
+        # self.avoid = True. Left and right junctions expose different
+        # corner/wall geometry to the LIDAR, so it was easy for a right
+        # turn -- but not a left turn -- to trip the 0.8 m obstacle
+        # threshold right as lane-stick should have taken over. When that
+        # happened, this function returned immediately, lidar_callback's
+        # generic avoidance steering took over instead, and the sign
+        # decision was silently discarded for that frame (and often the
+        # whole turn, since avoidance can keep re-triggering).
+        #
+        # Fix: once a turn is actively armed/executing (STICK or TURNING),
+        # don't let raw obstacle-avoidance override the turn controller.
+        # Lane-stick already keeps a safe, controlled distance from the
+        # curb/wall it is following, so suppressing generic avoidance here
+        # is safe. Plain CENTER/RETURN_CENTER driving still honors avoid.
+        # --------------------------------------------------------------
+        if self.avoid and self.lane_mode not in ("STICK", "TURNING"):
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    "[DEBUG_LOG] edge_vectors_callback: bypassed by LIDAR "
+                    f"avoidance (avoid=True, lane_mode={self.lane_mode})"
+                )
             return
 
         now = self.get_clock().now().nanoseconds * 1e-9
@@ -201,9 +240,43 @@ class LineFollower(Node):
             self.get_logger().info(
                 f"Ignoring stale pending turn: {self.pending_turn}"
             )
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    "[DEBUG_LOG] pending_turn EXPIRED "
+                    f"(age={now - self.pending_turn_time:.2f}s > {SIGN_MAX_AGE}s). "
+                    "If this fires right before a missed turn, the sign was "
+                    "armed but geometry never confirmed it (see "
+                    "turn_geometry_detected logs)."
+                )
             self.pending_turn = None
             self.sign_candidate = None
             self.sign_candidate_count = 0
+
+        # DEBUG_LOG: throttled state trace so you can correlate lane_mode /
+        # avoid / pending_turn / stick_side frame-by-frame against the bag.
+        if DEBUG_LOG:
+            self._dbg_edge_call_count += 1
+            state_changed = (
+                self.lane_mode != self._dbg_last_lane_mode
+                or self.avoid != self._dbg_last_avoid
+                or self.stick_side != self._dbg_last_stick_side
+            )
+            if state_changed or (
+                self._dbg_edge_call_count % DEBUG_LOG_EVERY_N_EDGE_CALLBACKS == 0
+            ):
+                self.get_logger().info(
+                    "[DEBUG_LOG] state: "
+                    f"lane_mode={self.lane_mode} "
+                    f"pending_turn={self.pending_turn} "
+                    f"stick_side={self.stick_side} "
+                    f"avoid={self.avoid} "
+                    f"vector_count={message.vector_count} "
+                    f"target_turn={self.target_turn:.3f} "
+                    f"target_speed={self.target_speed:.3f}"
+                )
+            self._dbg_last_lane_mode = self.lane_mode
+            self._dbg_last_avoid = self.avoid
+            self._dbg_last_stick_side = self.stick_side
 
         # --------------------------------------------------------------
         # Active lane-stick controller
@@ -244,7 +317,16 @@ class LineFollower(Node):
         # turn. Otherwise execute the ORIGINAL working line follower.
         # --------------------------------------------------------------
         if self.pending_turn in ("Left", "Right"):
-            if self.turn_geometry_detected(message):
+            geometry_ok = self.turn_geometry_detected(message)
+            if DEBUG_LOG:
+                distance, angle = self.selected_edge_geometry(message)
+                self.get_logger().info(
+                    f"[DEBUG_LOG] CENTER mode, pending_turn={self.pending_turn}: "
+                    f"turn_geometry_detected={geometry_ok} "
+                    f"(selected_edge distance={distance}, angle={angle:.3f}, "
+                    f"threshold={TURN_START_ANGLE})"
+                )
+            if geometry_ok:
                 self.start_lane_stick(self.pending_turn)
                 self.update_lane_stick(message)
                 return
@@ -383,17 +465,38 @@ class LineFollower(Node):
         immediately produce a steering command.
         """
         if message.vector_count != 2:
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    "[DEBUG_LOG] turn_geometry_detected: False "
+                    f"(vector_count={message.vector_count} != 2)"
+                )
             return False
         if not message.vector_1 or not message.vector_2:
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    "[DEBUG_LOG] turn_geometry_detected: False "
+                    f"(vector_1 empty={not message.vector_1}, "
+                    f"vector_2 empty={not message.vector_2})"
+                )
             return False
 
         distance, angle = self.selected_edge_geometry(message)
         if distance is None:
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    "[DEBUG_LOG] turn_geometry_detected: False (distance=None)"
+                )
             return False
 
         # A normal straight edge is close to vertical in the image. The
         # selected edge must actually bend before lane-stick begins.
-        return abs(angle) >= TURN_START_ANGLE
+        result = abs(angle) >= TURN_START_ANGLE
+        if DEBUG_LOG and not result:
+            self.get_logger().info(
+                f"[DEBUG_LOG] turn_geometry_detected: False "
+                f"(|angle|={abs(angle):.3f} < TURN_START_ANGLE={TURN_START_ANGLE})"
+            )
+        return result
 
     def start_lane_stick(self, direction):
         self.stick_side = direction
@@ -409,6 +512,11 @@ class LineFollower(Node):
     def update_lane_stick(self, message):
         """Maintain a safe distance from the selected track edge."""
         if self.stick_side not in ("Left", "Right"):
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    "[DEBUG_LOG] update_lane_stick: invalid stick_side="
+                    f"{self.stick_side!r}, forcing lane_mode back to CENTER"
+                )
             self.lane_mode = "CENTER"
             return
 
@@ -420,6 +528,11 @@ class LineFollower(Node):
 
         if distance is None:
             # Never spin blindly when the selected edge disappears.
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    f"[DEBUG_LOG] update_lane_stick ({self.stick_side}): "
+                    "selected edge LOST -> decaying turn, capping speed"
+                )
             self.target_turn *= 0.75
             self.target_speed = min(self.target_speed, LANE_STICK_SPEED)
             return
@@ -445,6 +558,14 @@ class LineFollower(Node):
         )
         self.target_speed = LANE_STICK_SPEED
 
+        if DEBUG_LOG:
+            self.get_logger().info(
+                f"[DEBUG_LOG] update_lane_stick ({self.stick_side}, {self.lane_mode}): "
+                f"distance={distance:.1f} error={error:.1f} angle={angle:.3f} "
+                f"raw_turn={turn:.3f} smoothed_turn={self.target_turn:.3f} "
+                f"turn_complete_count={self.turn_complete_count}"
+            )
+
         # A bend has to straighten for several frames before we call the turn
         # complete. This prevents immediate hand-back at the intersection.
         now = self.get_clock().now().nanoseconds * 1e-9
@@ -460,6 +581,10 @@ class LineFollower(Node):
             and abs(angle) >= TURN_START_ANGLE
         ):
             self.lane_mode = "TURNING"
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    f"[DEBUG_LOG] lane_mode STICK -> TURNING ({self.stick_side})"
+                )
 
         if (
             self.lane_mode == "TURNING"
@@ -474,6 +599,12 @@ class LineFollower(Node):
             self.get_logger().info(
                 "Turn complete. Blending back to normal centre following."
             )
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    f"[DEBUG_LOG] lane_mode TURNING -> RETURN_CENTER "
+                    f"(elapsed={elapsed:.2f}s, "
+                    f"hit_time_cap={elapsed >= TURN_MAX_TIME})"
+                )
 
     def lidar_callback(self, message):
         """
@@ -486,6 +617,35 @@ class LineFollower(Node):
         - Write obstacle avoidance maneuvers (e.g. stop, steer left/right around the block, and merge back).
         - Use LIDAR side-ranges to verify distance to building/QR signs before patient pickup/hospital drop actions.
         """
+        # --------------------------------------------------------------
+        # FIX #2 (works together with FIX #1 above):
+        # While a sign-commanded turn is actively executing (STICK/TURNING),
+        # the buggy is deliberately hugging close to a track edge/curb --
+        # that's expected proximity, not an obstacle. Previously this
+        # function had no awareness of lane_mode at all, so it would happily
+        # set self.avoid = True from ordinary turn-time proximity and steer
+        # off on its own, fighting (and, per FIX #1, completely overriding)
+        # the lane-stick controller. Right turns were more likely to expose
+        # this since junction geometry differs left vs right.
+        #
+        # We simply don't run generic avoidance while a turn is in progress;
+        # lane-stick's own distance-keeping (LANE_STICK_DISTANCE_PX) already
+        # handles safe clearance during the maneuver.
+        # --------------------------------------------------------------
+        if self.lane_mode in ("STICK", "TURNING"):
+            if self.avoid:
+                if DEBUG_LOG:
+                    self.get_logger().info(
+                        "[DEBUG_LOG] lidar_callback: clearing stale avoid=True "
+                        f"because lane_mode={self.lane_mode} (turn in progress)"
+                    )
+                self.avoid = False
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    f"[DEBUG_LOG] lidar_callback: SKIPPED (lane_mode={self.lane_mode})"
+                )
+            return
+
         # HINTS:
         n = len(message.ranges)
         right_sector = message.ranges[int(n * 7/18): int(n * 9/18)]
@@ -495,6 +655,12 @@ class LineFollower(Node):
             if min(sector)<0.8:
                 spd =min(self.target_speed,min(sector)*self.expconst/0.8 +(1-self.expconst)*self.target_speed)
                 self.avoid=True
+                if DEBUG_LOG:
+                    self.get_logger().info(
+                        "[DEBUG_LOG] lidar_callback: OBSTACLE -> avoid=True "
+                        f"(min_dist={min(sector):.2f}m, "
+                        f"side={'right' if sector is right_sector else 'left'})"
+                    )
                 if sector==right_sector :
                     lowerbound=n*7/18
                 else :
@@ -507,6 +673,10 @@ class LineFollower(Node):
 
                 self.rover_move_manual_mode(spd,angle)
             else:
+                if self.avoid and DEBUG_LOG:
+                    self.get_logger().info(
+                        "[DEBUG_LOG] lidar_callback: obstacle cleared -> avoid=False"
+                    )
                 self.avoid=False
         else:
             left_part = message.ranges[int(n*10/18):int(n*14/18)]
@@ -654,6 +824,11 @@ class LineFollower(Node):
                 break
 
         if destentry is None:
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    f"[DEBUG_LOG] sign_board_callback: no entry matched "
+                    f"destination={self.destination!r} in entries={entries}"
+                )
             return
 
         candidates = [
@@ -663,12 +838,26 @@ class LineFollower(Node):
         if not candidates:
             return
 
+        # DEBUG_LOG: if two candidates tie in distance-to-destination, min()
+        # deterministically picks the FIRST one in `entries` order -- worth
+        # confirming this isn't quietly biasing Left vs Right selection.
         nearest = min(
             candidates,
             key=lambda entry: abs(entry[1] - destentry[1]),
         )
+        if DEBUG_LOG:
+            diffs = [(c[0], abs(c[1] - destentry[1])) for c in candidates]
+            self.get_logger().info(
+                f"[DEBUG_LOG] sign_board_callback: destentry={destentry} "
+                f"candidates(diff)={diffs} -> nearest={nearest}"
+            )
 
         if abs(nearest[1] - destentry[1]) >= 0.1:
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    f"[DEBUG_LOG] sign_board_callback: nearest candidate too far "
+                    f"(diff={abs(nearest[1] - destentry[1]):.3f} >= 0.1) -> ignored"
+                )
             return
 
         direction = nearest[0]
@@ -687,6 +876,11 @@ class LineFollower(Node):
             self.sign_candidate_count = 1
 
         if self.sign_candidate_count < 3:
+            if DEBUG_LOG:
+                self.get_logger().info(
+                    f"[DEBUG_LOG] sign_board_callback: {direction} candidate "
+                    f"count={self.sign_candidate_count}/3, not armed yet"
+                )
             return
 
         self.pending_turn = direction
