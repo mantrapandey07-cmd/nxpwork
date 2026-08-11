@@ -311,7 +311,6 @@ class LineFollower(Node):
 
     def speed_from_turn(self, turn: float) -> float:
         reduction = MAX_TURN_SPEED_REDUCTION * min(abs(turn), 1.0)
-
         return max(0.07, BASE_SPEED * (1.0 - reduction))
 
     def edge_vectors_callback(self, message: EdgeVectors) -> None:
@@ -803,6 +802,10 @@ class LineFollower(Node):
                 "Lane centre restored. Normal line following resumed."
             )
 
+
+    def control_line_following(self) -> None:
+        """Final command publisher for normal line following."""
+        self.set_command(self.line_speed, self.line_turn)
 
     # ======================================================================
     # LiDAR processing
