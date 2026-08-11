@@ -63,8 +63,17 @@ SIGN_TURN_SPEED = 0.12
 # Sign-board lane sticking / intersection handling
 # ---------------------------------------------------------------------------
 LANE_STICK_DISTANCE_PX = 120.0
-LANE_STICK_KP = 0.006
-LANE_STICK_KANGLE = 0.45
+LANE_STICK_KP = 0.0030
+LANE_STICK_KANGLE = 0.16
+LANE_STICK_MAX_TURN = 0.28
+NORMAL_MAX_TURN = 0.38
+TURN_MAX_TURN = 0.42
+CENTER_MAX_TURN = 0.32
+MIN_LANE_WIDTH_PX = 180.0
+EDGE_HYSTERESIS_PX = 18.0
+TURN_MAX_TIME = 2.5
+TURN_MIN_SPEED = 0.07
+STEERING_DEADBAND = 0.025
 SIGN_STABLE_FRAMES = 4
 SIGN_MAX_PENDING_AGE = 8.0
 TURN_START_ANGLE = 0.18
@@ -224,6 +233,8 @@ class LineFollower(Node):
         self.lane_stick_edge: Optional[str] = None
         self.turn_started = False
         self.turn_complete_count = 0
+        self.turn_start_time = 0.0
+        self.turn_last_angle = 0.0
 
         # Latest edge geometry.
         self.left_edge_distance: Optional[float] = None
@@ -396,11 +407,12 @@ class LineFollower(Node):
             self.left_edge_distance is not None
             and self.right_edge_distance is not None
         ):
-            # Desired centre is halfway between the two edges.
-            # Positive error means the buggy is displaced toward the right.
+            # For image-space distances from the image centre:
+            # left edge = dL to the left, right edge = dR to the right.
+            # The lane-centre error is therefore (dR - dL)/2.
             self.center_error = (
-                self.left_edge_distance
-                - self.right_edge_distance
+                self.right_edge_distance
+                - self.left_edge_distance
             ) / 2.0
 
     @staticmethod
@@ -451,59 +463,116 @@ class LineFollower(Node):
         )
 
     def update_center_following(self) -> None:
+        """
+        Conservative centre-of-lane controller.
+
+        The previous controller had the steering sign backwards for the
+        centre error convention and could create a positive-feedback loop,
+        producing continuous right-hand circles.
+        """
         if (
             self.left_edge_distance is not None
             and self.right_edge_distance is not None
         ):
-            turn = -CENTER_RETURN_KP * self.center_error
-            turn += 0.25 * (
-                self.left_edge_angle + self.right_edge_angle
+            lane_width = (
+                self.left_edge_distance
+                + self.right_edge_distance
             )
-            turn = self.clamp(turn, -1.0, 1.0)
+
+            if lane_width < MIN_LANE_WIDTH_PX:
+                # Geometry is inconsistent / too narrow. Do not make a large
+                # steering command from it.
+                turn = 0.0
+            else:
+                # If the buggy is too far right, center_error is negative,
+                # so steer left. If too far left, steer right.
+                turn = CENTER_RETURN_KP * self.center_error
+
+                # Edge orientation is only a small feed-forward term.
+                turn += 0.08 * (
+                    self.left_edge_angle + self.right_edge_angle
+                )
+
+            turn = self.clamp(
+                turn,
+                -CENTER_MAX_TURN,
+                CENTER_MAX_TURN,
+            )
+
+            if abs(turn) < STEERING_DEADBAND:
+                turn = 0.0
 
             self.line_turn = (
-                LINE_ALPHA_TWO * turn
-                + (1.0 - LINE_ALPHA_TWO) * self.line_turn
+                0.12 * turn
+                + 0.88 * self.line_turn
             )
+
+            self.line_turn = self.clamp(
+                self.line_turn,
+                -NORMAL_MAX_TURN,
+                NORMAL_MAX_TURN,
+            )
+
             self.line_speed = self.speed_from_turn(self.line_turn)
             self.last_turn_direction = (
-                1.0 if self.line_turn > 0.02
-                else -1.0 if self.line_turn < -0.02
+                1.0 if self.line_turn > 0.03
+                else -1.0 if self.line_turn < -0.03
                 else self.last_turn_direction
             )
             self.lost_count = 0
             return
 
-        # One-edge fallback.
+        # With only one edge, use a weak steering command. Never spin.
         if self.left_edge_distance is not None:
-            turn = -0.35 + 0.25 * self.left_edge_angle
+            turn = -0.12 + 0.06 * self.left_edge_angle
         elif self.right_edge_distance is not None:
-            turn = 0.35 + 0.25 * self.right_edge_angle
+            turn = 0.12 + 0.06 * self.right_edge_angle
         else:
+            self.handle_lost_edges()
             return
 
-        self.line_turn = (
-            LINE_ALPHA_ONE * turn
-            + (1.0 - LINE_ALPHA_ONE) * self.line_turn
+        self.line_turn = self.clamp(
+            0.15 * turn + 0.85 * self.line_turn,
+            -NORMAL_MAX_TURN,
+            NORMAL_MAX_TURN,
         )
         self.line_speed = self.speed_from_turn(self.line_turn)
         self.lost_count = 0
 
     def is_turn_opportunity(self) -> bool:
         """
-        A sign is only acted upon once the corresponding edge geometry has
-        begun to bend enough to indicate the buggy is actually entering an
-        intersection/turn.
+        A sign is not enough to start a turn.
+
+        Require:
+          1. both edges to be visible,
+          2. a physically plausible lane width,
+          3. the selected edge to show a sustained bend.
+
+        This is deliberately conservative: false positives are much worse
+        than waiting another few frames before entering lane-stick.
         """
-        if not self.edge_geometry_valid:
+        if not (
+            self.left_edge_distance is not None
+            and self.right_edge_distance is not None
+        ):
+            return False
+
+        lane_width = (
+            self.left_edge_distance
+            + self.right_edge_distance
+        )
+
+        if lane_width < MIN_LANE_WIDTH_PX:
             return False
 
         if self.pending_turn == "Right":
-            return abs(self.right_edge_angle) >= TURN_START_ANGLE
-        if self.pending_turn == "Left":
-            return abs(self.left_edge_angle) >= TURN_START_ANGLE
+            angle = self.right_edge_angle
+        elif self.pending_turn == "Left":
+            angle = self.left_edge_angle
+        else:
+            return False
 
-        return False
+        return abs(angle) >= TURN_START_ANGLE
 
     def activate_lane_stick(self, direction: str) -> None:
         if direction == "Right":
@@ -517,6 +586,8 @@ class LineFollower(Node):
 
         self.turn_started = False
         self.turn_complete_count = 0
+        self.turn_start_time = self.now_sec()
+        self.turn_last_angle = 0.0
 
         self.get_logger().info(
             f"Activating {direction} lane-stick maneuver."
@@ -528,18 +599,42 @@ class LineFollower(Node):
         edge_angle: float,
         side: str,
     ) -> float:
+        """
+        Bounded edge-distance controller.
+
+        Desired geometry:
+            buggy --- 120 px --- selected edge
+
+        Crucially, distance correction is only a small term. The old gain
+        could make the buggy continuously rotate instead of gently translating
+        toward the desired lane position.
+        """
         if edge_distance is None:
             return self.line_turn
 
         error = edge_distance - LANE_STICK_DISTANCE_PX
-        magnitude = LANE_STICK_KP * error
 
+        # For the right edge:
+        #   edge too far right -> buggy is too far left -> steer right.
+        # For the left edge:
+        #   edge too far left -> buggy is too far right -> steer left.
         if side == "right":
-            turn = magnitude + LANE_STICK_KANGLE * edge_angle
+            distance_term = LANE_STICK_KP * error
+            angle_term = LANE_STICK_KANGLE * edge_angle
         else:
-            turn = -magnitude - LANE_STICK_KANGLE * edge_angle
+            distance_term = -LANE_STICK_KP * error
+            angle_term = -LANE_STICK_KANGLE * edge_angle
 
-        return self.clamp(turn, -0.80, 0.80)
+        turn = distance_term + angle_term
+
+        if abs(turn) < STEERING_DEADBAND:
+            turn = 0.0
+
+        return self.clamp(
+            turn,
+            -LANE_STICK_MAX_TURN,
+            LANE_STICK_MAX_TURN,
+        )
 
     def update_lane_stick(self) -> None:
         side = self.lane_stick_edge
@@ -547,14 +642,19 @@ class LineFollower(Node):
         if side == "right":
             distance = self.right_edge_distance
             angle = self.right_edge_angle
-            direction = 0.55
         else:
             distance = self.left_edge_distance
             angle = self.left_edge_angle
-            direction = -0.55
 
         if distance is None:
-            self.set_command(SIGN_TURN_SPEED, direction)
+            # Do not blindly spin when the selected edge disappears.
+            self.line_turn *= 0.85
+            self.line_turn = self.clamp(
+                self.line_turn,
+                -LANE_STICK_MAX_TURN,
+                LANE_STICK_MAX_TURN,
+            )
+            self.line_speed = TURN_MIN_SPEED
             return
 
         turn = self.edge_distance_controller(
@@ -563,14 +663,26 @@ class LineFollower(Node):
             side,
         )
 
-        self.line_turn = turn
+        self.line_turn = (
+            0.25 * turn
+            + 0.75 * self.line_turn
+        )
+        self.line_turn = self.clamp(
+            self.line_turn,
+            -LANE_STICK_MAX_TURN,
+            LANE_STICK_MAX_TURN,
+        )
         self.line_speed = max(
-            0.08,
-            self.speed_from_turn(turn),
+            TURN_MIN_SPEED,
+            self.speed_from_turn(self.line_turn),
         )
 
+        # The sign has already armed the maneuver. We now wait for a genuine
+        # bend before calling it a turn.
         if abs(angle) >= TURN_START_ANGLE:
             self.turn_started = True
+            self.turn_start_time = self.now_sec()
+            self.turn_last_angle = abs(angle)
             self.lane_mode = "TURNING"
             self.turn_complete_count = 0
 
@@ -580,40 +692,58 @@ class LineFollower(Node):
         if side == "right":
             distance = self.right_edge_distance
             angle = self.right_edge_angle
-            fallback_turn = 0.45
         else:
             distance = self.left_edge_distance
             angle = self.left_edge_angle
-            fallback_turn = -0.45
+
+        elapsed = self.now_sec() - self.turn_start_time
 
         if distance is None:
-            self.set_command(SIGN_TURN_SPEED, fallback_turn)
+            # Missing edge during an intersection is not permission to keep
+            # rotating indefinitely.
+            self.line_turn *= 0.75
+            self.line_speed = TURN_MIN_SPEED
             self.turn_complete_count = 0
-            return
-
-        turn = self.edge_distance_controller(
-            distance,
-            angle,
-            side,
-        )
-
-        # The selected edge becoming nearly straight for several consecutive
-        # frames is our turn-complete condition.
-        if abs(angle) < 0.10:
-            self.turn_complete_count += 1
         else:
-            self.turn_complete_count = 0
+            turn = self.edge_distance_controller(
+                distance,
+                angle,
+                side,
+            )
 
-        self.set_command(
-            max(0.08, self.speed_from_turn(turn)),
-            turn,
-        )
+            self.line_turn = (
+                0.20 * turn
+                + 0.80 * self.line_turn
+            )
+            self.line_turn = self.clamp(
+                self.line_turn,
+                -TURN_MAX_TURN,
+                TURN_MAX_TURN,
+            )
+            self.line_speed = max(
+                TURN_MIN_SPEED,
+                self.speed_from_turn(self.line_turn),
+            )
 
-        if self.turn_complete_count >= TURN_COMPLETE_STABLE_FRAMES:
+            # Completion requires the selected edge to straighten for several
+            # frames. This prevents a single noisy frame from ending the turn.
+            if abs(angle) < 0.10:
+                self.turn_complete_count += 1
+            else:
+                self.turn_complete_count = 0
+
+            self.turn_last_angle = abs(angle)
+
+        # Hard safety against endless circular motion.
+        if (
+            self.turn_complete_count >= TURN_COMPLETE_STABLE_FRAMES
+            or elapsed >= TURN_MAX_TIME
+        ):
             self.lane_mode = "RETURN_CENTER"
             self.turn_complete_count = 0
+
             self.get_logger().info(
-                "Turn completed. Smoothly returning toward lane centre."
+                "Ending turn and blending back toward lane centre."
             )
 
     def update_return_to_center(self) -> None:
@@ -621,21 +751,40 @@ class LineFollower(Node):
             self.left_edge_distance is None
             or self.right_edge_distance is None
         ):
-            self.set_command(
-                max(0.08, self.line_speed),
-                self.line_turn * 0.6,
-            )
+            # Fade the old turn rather than holding a circle.
+            self.line_turn *= 0.80
+            self.line_speed = max(0.08, self.speed_from_turn(self.line_turn))
             return
 
-        target_turn = -CENTER_RETURN_KP * self.center_error
-        target_turn += 0.25 * (
+        lane_width = (
+            self.left_edge_distance
+            + self.right_edge_distance
+        )
+
+        if lane_width < MIN_LANE_WIDTH_PX:
+            self.line_turn *= 0.85
+            return
+
+        # Same centre convention as normal following.
+        target_turn = CENTER_RETURN_KP * self.center_error
+        target_turn += 0.08 * (
             self.left_edge_angle + self.right_edge_angle
         )
-        target_turn = self.clamp(target_turn, -1.0, 1.0)
+        target_turn = self.clamp(
+            target_turn,
+            -CENTER_MAX_TURN,
+            CENTER_MAX_TURN,
+        )
 
         self.line_turn += (
             target_turn - self.line_turn
         ) * CENTER_RETURN_RATE
+
+        self.line_turn = self.clamp(
+            self.line_turn,
+            -CENTER_MAX_TURN,
+            CENTER_MAX_TURN,
+        )
         self.line_speed = self.speed_from_turn(self.line_turn)
 
         if abs(self.center_error) <= CENTER_RETURN_TOLERANCE_PX:
@@ -649,21 +798,6 @@ class LineFollower(Node):
                 "Lane centre restored. Normal line following resumed."
             )
 
-    def speed_from_turn(self, turn: float) -> float:
-        """
-        Reduce forward speed smoothly as steering demand increases.
-        """
-        reduction = MAX_TURN_SPEED_REDUCTION * min(abs(turn), 1.0)
-        return self.clamp(
-            BASE_SPEED * (1.0 - reduction),
-            0.07,
-            BASE_SPEED,
-        )
-
-    def control_line_following(self) -> None:
-        # Pending sign instructions do not directly steer. The edge-vector
-        # callback activates lane-stick when the turn opportunity is reached.
-        self.set_command(self.line_speed, self.line_turn)
 
     # ======================================================================
     # LiDAR processing
