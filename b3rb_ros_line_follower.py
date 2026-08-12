@@ -108,18 +108,23 @@ class LineFollower(Node):
         self.avoid = False
         self.patient_id = None
         self.hospital_id = None
-        self.destination = "A"
+        self.destination = None
         self.mission_completed = False
         self.approaching=False
         self.qr_data=""
-        self.expconst=0.8 #earlier 0.4
-        self.expconst2=0.8 #earlier it was 0.2
+        self.expconst=0.4
+        self.expconst2=0.2
         self.reached=False
         self.direction=""
         self.lost_count=0
         self.ackno=0
         self.override_till=0
         self.override_dur=1.5
+        self.STOP_dist=1.5
+        self.signboard_visible=0
+        self.stick_to_lane=False
+        self.path_width=0.5
+        
 
 
 
@@ -145,11 +150,54 @@ class LineFollower(Node):
     def edge_vectors_callback(self, message):
         if self.avoid:
             return
-        if self.get_clock().now().nanoseconds*(10**(-9))<self.override_till :
-            ang=0.7 if self.direction == "Left" else -0.7
-            self.target_turn = self.expconst *ang + (1 - self.expconst) * self.target_turn
-            self.target_speed = max(self.target_speed * 0.7, 0.15)
-            return
+        if self.stick_to_lane :
+            farpoint = None
+
+            if self.direction=="Left":
+                if message.vector_count == 1:
+                    farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
+                    dx = farpoint.x - message.image_width / 2
+                elif message.vector_count == 2:
+                    if (message.vector_1[0].x- message.image_width / 2)*(message.vector_2[0].x- message.image_width / 2)<0:
+                        farpoint = message.vector_1[0] if (message.vector_1[0].x- message.image_width / 2)<0 else message.vector_2[0]
+                if farpoint is not None:
+                    dx = farpoint.x - message.image_width / 2
+                    dy = message.image_height - farpoint.y
+                    if dy == 0: return
+                    if dx<0:
+                        ofs=dx+self.path_width/5
+                        ang = -math.atan(ofs/dy) / (PI/2)
+                        angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
+                        speed=(1-abs(ang)*0.8)
+                        spd = speed*self.expconst +(1-self.expconst)*self.target_speed
+                        self.rover_move_manual_mode(spd, angle)
+                        return
+            if self.direction=="Right":
+                if message.vector_count == 1:
+                    farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
+                    dx = farpoint.x - message.image_width / 2
+                    dy = message.image_height - farpoint.y
+                elif message.vector_count == 2:
+                    if (message.vector_1[0].x- message.image_width / 2)*(message.vector_2[0].x- message.image_width / 2)<0:
+                        farpoint = message.vector_1[0] if (message.vector_1[0].x-message.image_width / 2)>0 else message.vector_2[0]
+                        dy = message.image_height - farpoint.y
+                        if dy == 0: return
+                if farpoint is not None: 
+                    dx = farpoint.x - message.image_width / 2
+                    if dx>0:
+                        ofs=dx-self.path_width/5
+                        ang = -math.atan(ofs/dy) / (PI/2)
+                        angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
+                        speed=(1-abs(ang)*0.8)
+                        spd = speed*self.expconst +(1-self.expconst)*self.target_speed
+                        self.rover_move_manual_mode(spd, angle)
+                        return
+                
+
+                        
+                        
+
+            
         if message.vector_count==0:
             self.lost_count = self.lost_count + 1
             decay = min(self.lost_count/10, 1.0)
@@ -174,6 +222,9 @@ class LineFollower(Node):
             self.rover_move_manual_mode(spd, angle)
 
         elif message.vector_count == 2:
+            if (message.vector_1[0].x- message.image_width / 2)*(message.vector_2[0].x- message.image_width / 2)<0:
+                o=abs((message.vector_1[0].x- message.image_width / 2)-(message.vector_2[0].x- message.image_width / 2)) 
+                self.path_width=o if o>self.path_width else self.path_width
             farx = (message.vector_1[0].x + message.vector_2[0].x) / 2
             fary = (message.vector_1[0].y + message.vector_2[0].y) / 2
             dx = farx - message.image_width / 2
@@ -230,22 +281,18 @@ class LineFollower(Node):
             if min(min_left, min_right) < 3:
                 if min_left < min_right:
                     idx = int(n*10/18) + left_part.index(min_left)
-                    offset = (n/2 - idx) / (4*n/18)
-                    spd=self.target_speed*(1-abs(offset))
-                    self.rover_move_manual_mode(spd, self.target_turn)
+                    
                 else:
                     idx = int(n*4/18) + right_part.index(min_right)
-                    offset = (n/2 - idx) / (4*n/18)
-                    spd=self.target_speed*(1-abs(offset))
-                    self.rover_move_manual_mode(spd, self.target_turn)
+                offset = (n/2 - idx) / (4*n/18)
+                spd=self.target_speed*(1-abs(offset))
+                self.rover_move_manual_mode(spd, self.target_turn)
      
 
-                if min(min_left, min_right) < 2:
-
-                    self.target_speed = 0.0
-                    self.target_turn = 0.0
-                    self.reached = True
-                    self.get_logger().info("REACHED THE HOSPITAL")
+                if min(min_left, min_right) < 0.5:
+                    self.target_speed=0
+                    self.approaching=False
+                    self.reached=True
 
         
 
@@ -317,9 +364,7 @@ class LineFollower(Node):
                 if self.patient_id==map2[self.destination]:
                     self.get_logger().info(f"Approaching target patient location: {self.patient_id}")
                     self.approaching = True
-
-                    # THIS COULD BE NEEDED
-                    # self.target_speed = 0.2
+                    self.approaching = True
                     self.avoid = False
                     self.qr_data=message.data
             else: 
@@ -352,26 +397,21 @@ class LineFollower(Node):
         entries=[]
         for e in message.data.split(";"):
             parts = e.split(":")
-            entries.append([parts[0], float(parts[1])]) #entries is [[A,dist],[B,dist]]
-        destentry=None 
+            entries.append([parts[0]``, float(parts[1])])
+        destentry=None
         for e in entries :
-            if e[0]==self.destination:
-                destentry= e 
-                self.get_logger().info("DESENTRY IS "  + str(destentry))
+            if e[0]==self.destination: destentry= e 
         
         candidates = [e for e in entries if e[0] in ("Left", "Right", "Straight")]
-        if not candidates:
-            return
-        if destentry is None:  # error handling for none case
-            self.get_logger().info(f"Destination '{self.destination}' not found in sign board")
+        if (not candidates) or ( destentry is None):
             return
         nearest = min(candidates, key=lambda e: abs(e[1] - destentry[1]))
         if abs(nearest[1] - destentry[1]) < 0.1: 
             self.direction = nearest[0]
-            if self.direction in ['Left','Right']:
-                # convert nanoseconds to seconds and add override duration
-                now_sec = self.get_clock().now().nanoseconds * 1e-9
-                self.override_till = now_sec + self.override_dur
+            if self.direction in ['Left', 'Right']:
+                self.stick_to_lane = True
+            elif self.direction == 'Straight':
+                self.stick_to_lane = False
                 
 
         pass
