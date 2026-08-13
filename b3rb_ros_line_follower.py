@@ -207,9 +207,11 @@ class LineFollower(Node):
 
             
         if message.vector_count==0:
-            self.lost_count = self.lost_count + 1
-            decay = min(self.lost_count/10, 1.0)
-            angle = self.expconst * decay + (1 - self.expconst) * self.target_turn
+		    self.lost_count = self.lost_count + 1
+		    decay = min(self.lost_count/10, 1.0)
+		    dirn = 1.0 if self.direction=="Left" else (-1.0 if self.direction=="Right" else 0.0)
+		    angle = self.expconst * decay * dirn + (1 - self.expconst) * self.target_turn
+		    self.rover_move_manual_mode(self.target_speed, angle)
             self.rover_move_manual_mode(self.target_speed, angle)
         elif message.vector_count == 1:
             farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
