@@ -30,6 +30,9 @@ SPEED_MAX = 1.0
 TURN_MIN = -1.0
 TURN_MAX = 1.0
 
+# DEBUG_LOG: flip to False to silence sign-board trace once verified working
+DEBUG_LOG = True
+
 # CONFIGURATION:
 # The buggy is driven in manual mode by publishing standard controller Joy messages to /cerebri/in/joy.
 # The layout is: msg.axes = [0.0, speed, 0.0, turn]
@@ -118,12 +121,14 @@ class LineFollower(Node):
         self.direction=""
         self.lost_count=0
         self.ackno=0
-        self.override_till=0
-        self.override_dur=1.5
         self.STOP_dist=1.5
         self.signboard_visible=0
         self.stick_to_lane=False
         self.path_width=0.5
+
+        # buffer/debounce state for sign-board direction matching
+        self.sign_candidate=None
+        self.sign_candidate_count=0
         
 
 
@@ -160,6 +165,7 @@ class LineFollower(Node):
                 elif message.vector_count == 2:
                     if (message.vector_1[0].x- message.image_width / 2)*(message.vector_2[0].x- message.image_width / 2)<0:
                         farpoint = message.vector_1[0] if (message.vector_1[0].x- message.image_width / 2)<0 else message.vector_2[0]
+                    
                 if farpoint is not None:
                     dx = farpoint.x - message.image_width / 2
                     dy = message.image_height - farpoint.y
@@ -172,6 +178,8 @@ class LineFollower(Node):
                         spd = speed*self.expconst +(1-self.expconst)*self.target_speed
                         self.rover_move_manual_mode(spd, angle)
                         return
+                    
+
             if self.direction=="Right":
                 if message.vector_count == 1:
                     farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
@@ -396,23 +404,55 @@ class LineFollower(Node):
         self.get_logger().info(f"Heard Sign Board: {message.data}")
         entries=[]
         for e in message.data.split(";"):
-            parts = e.split(":")
-            entries.append([parts[0], float(parts[1])])
+            e=e.strip()
+            if not e:
+                continue
+            parts = e.split(":",1)
+            if len(parts)!=2:
+                continue
+            try:
+                entries.append([parts[0].strip(), float(parts[1])])
+            except ValueError:
+                continue
+
         destentry=None
         for e in entries :
             if e[0]==self.destination: destentry= e 
         
         candidates = [e for e in entries if e[0] in ("Left", "Right", "Straight")]
         if (not candidates) or ( destentry is None):
+            if DEBUG_LOG:
+                self.get_logger().info(f"[DEBUG_LOG] sign_board_callback: no usable match, entries={entries} destination={self.destination}")
             return
         nearest = min(candidates, key=lambda e: abs(e[1] - destentry[1]))
+        if DEBUG_LOG:
+            self.get_logger().info(f"[DEBUG_LOG] sign_board_callback: destentry={destentry} nearest={nearest}")
         if abs(nearest[1] - destentry[1]) < 0.1: 
-            self.direction = nearest[0]
-            if self.direction in ['Left', 'Right']:
-                self.stick_to_lane = True
-            elif self.direction == 'Straight':
+            direction = nearest[0]
+
+            if direction == 'Straight':
+                self.direction = 'Straight'
                 self.stick_to_lane = False
-                
+                self.sign_candidate = None
+                self.sign_candidate_count = 0
+                return
+
+            # buffer: require 3 consecutive matching detections before arming
+            if direction == self.sign_candidate:
+                self.sign_candidate_count += 1
+            else:
+                self.sign_candidate = direction
+                self.sign_candidate_count = 1
+
+            if DEBUG_LOG:
+                self.get_logger().info(f"[DEBUG_LOG] sign_board_callback: {direction} candidate count={self.sign_candidate_count}/3")
+
+            if self.sign_candidate_count < 3:
+                return
+
+            self.direction = direction
+            self.stick_to_lane = True
+            self.get_logger().info(f"sticking to: {self.direction}")
 
         pass
 
