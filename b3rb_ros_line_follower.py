@@ -30,6 +30,9 @@ SPEED_MAX = 1.0
 TURN_MIN = -1.0
 TURN_MAX = 1.0
 
+# DEBUG_LOG: flip to False to silence sign-board trace once verified working
+DEBUG_LOG = True
+
 # CONFIGURATION:
 # The buggy is driven in manual mode by publishing standard controller Joy messages to /cerebri/in/joy.
 # The layout is: msg.axes = [0.0, speed, 0.0, turn]
@@ -101,7 +104,7 @@ class LineFollower(Node):
         # ------------------ State Variables & Timer ------------------
         
         # Default controls: drive straight slowly
-        self.target_speed = 0.15
+        self.target_speed = 0.3
         self.target_turn = 0.0
 
         # State variables (You can add your own state flags / state machines here)
@@ -118,8 +121,18 @@ class LineFollower(Node):
         self.direction=""
         self.lost_count=0
         self.ackno=0
-        self.override_till=0
-        self.override_dur=1.5
+        self.STOP_dist=1.5
+        self.signboard_visible=0
+        self.stick_to_lane=False
+        self.path_width=0.5
+        self.pending_turn=""
+
+
+        # buffer/debounce state for sign-board direction matching
+        self.sign_candidate=None
+        self.sign_candidate_count=0
+
+        
 
 
 
@@ -145,15 +158,79 @@ class LineFollower(Node):
     def edge_vectors_callback(self, message):
         if self.avoid:
             return
-        if self.get_clock().now().nanoseconds*(10**(-9))<self.override_till :
-            ang=0.7 if self.direction == "Left" else -0.7
-            self.target_turn = self.expconst *ang + (1 - self.expconst) * self.target_turn
-            self.target_speed = max(self.target_speed * 0.7, 0.15)
-            return
+        if self.pending_turn!="" and message.vector_count == 2:
+            m1=math.atan((message.vector_1[1].x-message.vector_1[0].x)/(message.vector_1[1].y-message.vector_1[0].y))/(PI/2) if (message.vector_1[1].y-message.vector_1[0].y)!=0 else 0
+            m2=math.atan((message.vector_2[1].x-message.vector_2[0].x)/(message.vector_2[1].y-message.vector_2[0].y))/(PI/2) if (message.vector_2[1].y-message.vector_2[0].y)!=0 else 0
+        elif(self.pending_turn!="" and message.vector_count == 1):
+            vec= message.vector_1 if message.vector_1 else message.vector_2
+            m1=math.atan((vec[1].x-vec[0].x)/(vec[1].y-vec[0].y))/(PI/2) if (vec[1].y-vec[0].y)!=0 else 0
+            m2=0
+        else:
+            m1,m2=0,0
+        if (abs(m1)>0.3)or(abs(m2)>0.3):
+            self.direction=self.pending_turn
+            self.pending_turn=""
+            self.stick_to_lane=True
+        if self.stick_to_lane :
+            farpoint = None
+
+            if self.direction=="Left":
+                if message.vector_count == 1:
+                    farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
+                    dx = farpoint.x - message.image_width / 2
+                elif message.vector_count == 2:
+                    if (message.vector_1[0].x- message.image_width / 2)<(message.vector_2[0].x- message.image_width / 2):
+                        farpoint = message.vector_1[0] 
+                    else: farpoint = message.vector_2[0]
+                    
+                if farpoint is not None:
+                    dx = farpoint.x - message.image_width / 2
+                    dy = message.image_height - farpoint.y
+                    if dy == 0: return
+                    if dx<0:
+                        ofs=dx+self.path_width/5
+                        ang = -math.atan(ofs/dy) / (PI/2)
+                        angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
+                        speed=(1-abs(ang)*0.8)
+                        spd = speed*self.expconst +(1-self.expconst)*self.target_speed
+                        self.rover_move_manual_mode(spd, angle)
+                        return
+                    
+
+            if self.direction=="Right":
+                if message.vector_count == 1:
+                    farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
+                    dx = farpoint.x - message.image_width / 2
+                    dy = message.image_height - farpoint.y
+                elif message.vector_count == 2:
+                    if (message.vector_1[0].x- message.image_width / 2)>(message.vector_2[0].x- message.image_width / 2):
+                        farpoint = message.vector_1[0] 
+                    else: farpoint = message.vector_2[0] 
+                    
+                if farpoint is not None: 
+                    dx = farpoint.x - message.image_width / 2
+                    if dx>0:
+                        ofs=dx-self.path_width/5
+                        dy = message.image_height - farpoint.y
+                        if dy == 0: return
+                        ang = -math.atan(ofs/dy) / (PI/2)
+                        angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
+                        speed=(1-abs(ang)*0.8)
+                        spd = speed*self.expconst +(1-self.expconst)*self.target_speed
+                        self.rover_move_manual_mode(spd, angle)
+                        return
+                
+
+                        
+                        
+
+            
         if message.vector_count==0:
             self.lost_count = self.lost_count + 1
             decay = min(self.lost_count/10, 1.0)
-            angle = self.expconst * decay + (1 - self.expconst) * self.target_turn
+            dirn = 1.0 if self.direction=="Left" else (-1.0 if self.direction=="Right" else 0.0)
+            angle = self.expconst * decay * dirn + (1 - self.expconst) * self.target_turn
+            self.rover_move_manual_mode(self.target_speed, angle)
             self.rover_move_manual_mode(self.target_speed, angle)
         elif message.vector_count == 1:
             farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
@@ -174,6 +251,9 @@ class LineFollower(Node):
             self.rover_move_manual_mode(spd, angle)
 
         elif message.vector_count == 2:
+            if (message.vector_1[0].x- message.image_width / 2)*(message.vector_2[0].x- message.image_width / 2)<0:
+                o=abs((message.vector_1[0].x- message.image_width / 2)-(message.vector_2[0].x- message.image_width / 2)) 
+                self.path_width=o if o>self.path_width else self.path_width
             farx = (message.vector_1[0].x + message.vector_2[0].x) / 2
             fary = (message.vector_1[0].y + message.vector_2[0].y) / 2
             dx = farx - message.image_width / 2
@@ -230,17 +310,15 @@ class LineFollower(Node):
             if min(min_left, min_right) < 3:
                 if min_left < min_right:
                     idx = int(n*10/18) + left_part.index(min_left)
-                    offset = (n/2 - idx) / (4*n/18)
-                    spd=self.target_speed*(1-abs(offset))
-                    self.rover_move_manual_mode(spd, self.target_turn)
+                    
                 else:
                     idx = int(n*4/18) + right_part.index(min_right)
-                    offset = (n/2 - idx) / (4*n/18)
-                    spd=self.target_speed*(1-abs(offset))
-                    self.rover_move_manual_mode(spd, self.target_turn)
+                offset = (n/2 - idx) / (4*n/18)
+                spd=self.target_speed*(1-abs(offset))
+                self.rover_move_manual_mode(spd, self.target_turn)
      
 
-                if self.target_speed<0.15:
+                if min(min_left, min_right) < 0.5:
                     self.target_speed=0
                     self.approaching=False
                     self.reached=True
@@ -347,21 +425,55 @@ class LineFollower(Node):
         self.get_logger().info(f"Heard Sign Board: {message.data}")
         entries=[]
         for e in message.data.split(";"):
-            parts = e.split(":")
-            entries.append([parts[0], float(parts[1])])
+            e=e.strip()
+            if not e:
+                continue
+            parts = e.split(":",1)
+            if len(parts)!=2:
+                continue
+            try:
+                entries.append([parts[0].strip(), float(parts[1])])
+            except ValueError:
+                continue
+
         destentry=None
         for e in entries :
             if e[0]==self.destination: destentry= e 
         
         candidates = [e for e in entries if e[0] in ("Left", "Right", "Straight")]
-        if not candidates:
+        if (not candidates) or ( destentry is None):
+            if DEBUG_LOG:
+                self.get_logger().info(f"[DEBUG_LOG] sign_board_callback: no usable match, entries={entries} destination={self.destination}")
             return
         nearest = min(candidates, key=lambda e: abs(e[1] - destentry[1]))
+        if DEBUG_LOG:
+            self.get_logger().info(f"[DEBUG_LOG] sign_board_callback: destentry={destentry} nearest={nearest}")
         if abs(nearest[1] - destentry[1]) < 0.1: 
-            self.direction = nearest[0]
-            if self.direction in ['Left','Right']:
-                self.override_till=self.get_clock().now().nanoseconds*(10**(-9))+self.override_dur
-                
+            direction = nearest[0]
+
+            if direction == 'Straight':
+                self.direction = 'Straight'
+                self.stick_to_lane = False
+                self.sign_candidate = None
+                self.sign_candidate_count = 0
+                return
+
+            # buffer: require 3 consecutive matching detections before arming
+            if direction == self.sign_candidate:
+                self.sign_candidate_count += 1
+            else:
+                self.sign_candidate = direction
+                self.sign_candidate_count = 1
+
+            if DEBUG_LOG:
+                self.get_logger().info(f"[DEBUG_LOG] sign_board_callback: {direction} candidate count={self.sign_candidate_count}/3")
+
+            if self.sign_candidate_count < 3:
+                return
+
+            self.pending_turn = direction
+           
+            self.get_logger().info(f"pending turn: {self.direction}")
 
         pass
 
