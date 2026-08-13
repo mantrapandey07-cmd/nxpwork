@@ -167,7 +167,7 @@ class LineFollower(Node):
             m2=0
         else:
             m1,m2=0,0
-        if (abs(m1)>0.3)or(abs(m2)>0.3):
+        if ((abs(m1)>0.3)or(abs(m2)>0.3)) and self.pending_turn!="Straight":
             self.direction=self.pending_turn
             self.pending_turn=""
             self.stick_to_lane=True
