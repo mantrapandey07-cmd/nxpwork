@@ -104,7 +104,7 @@ class LineFollower(Node):
         # ------------------ State Variables & Timer ------------------
         
         # Default controls: drive straight slowly
-        self.target_speed = 0.3
+        self.target_speed = 0.15
         self.target_turn = 0.0
 
         # State variables (You can add your own state flags / state machines here)
@@ -192,14 +192,14 @@ class LineFollower(Node):
                         dx = farpoint.x - message.image_width / 2
                         dy = message.image_height - farpoint.y
                         if dy == 0: return
-                        
-                        ofs=dx+self.path_width/5
-                        ang = -math.atan(ofs/dy) / (PI/2)
-                        angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
-                        speed=(1-abs(ang)*0.8)
-                        spd = speed*self.expconst +(1-self.expconst3)*self.target_speed
-                        self.rover_move_manual_mode(spd, angle)
-                        return
+                        if dx<0:
+                            ofs=dx+self.path_width/5
+                            ang = -math.atan(ofs/dy) / (PI/2)
+                            angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
+                            speed=(1-abs(ang)*0.8)
+                            spd = speed*self.expconst +(1-self.expconst)*self.target_speed
+                            self.rover_move_manual_mode(spd, angle)
+                            return
                     
 
                 if self.direction=="Right":
@@ -214,16 +214,17 @@ class LineFollower(Node):
                         
                     if farpoint is not None: 
                         dx = farpoint.x - message.image_width / 2
-                        
-                        ofs=dx-self.path_width/5
                         dy = message.image_height - farpoint.y
-                        if dy == 0: return
-                        ang = -math.atan(ofs/dy) / (PI/2)
-                        angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
-                        speed=(1-abs(ang)*0.8)
-                        spd = speed*self.expconst +(1-self.expconst)*self.target_speed
-                        self.rover_move_manual_mode(spd, angle)
-                        return
+                        if dx>0:
+                            ofs=dx-self.path_width/5
+                            
+                            if dy == 0: return
+                            ang = -math.atan(ofs/dy) / (PI/2)
+                            angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
+                            speed=(1-abs(ang)*0.8)
+                            spd = speed*self.expconst +(1-self.expconst)*self.target_speed
+                            self.rover_move_manual_mode(spd, angle)
+                            return
             else:
                 self.stick_to_lane=False
                 
@@ -246,7 +247,7 @@ class LineFollower(Node):
             dy = message.image_height - farpoint.y
             if dy == 0:
                 return
-            ang = -math.atan(dx/dy) / (PI/2) if abs(math.atan(dx/dy) / (PI/2)) > 0.2 else 0
+            ang = math.atan(dx/dy) / (PI/2) 
             angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
             if not self.approaching:
                 speed=(1-abs(ang)*0.8)
