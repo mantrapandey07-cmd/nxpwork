@@ -126,7 +126,7 @@ class LineFollower(Node):
         self.stick_to_lane=False
         self.path_width=0.5
         self.pending_turn=""
-        self.turn_till=4
+        self.turn_till=0.8
         self.timee=0
         self.expconst3=0.1
 
@@ -246,7 +246,7 @@ class LineFollower(Node):
             dy = message.image_height - farpoint.y
             if dy == 0:
                 return
-            ang = math.atan(dx/dy) / (PI/2) if abs(math.atan(dx/dy) / (PI/2)) > 0.2 else 0
+            ang = -math.atan(dx/dy) / (PI/2) if abs(math.atan(dx/dy) / (PI/2)) > 0.2 else 0
             angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
             if not self.approaching:
                 speed=(1-abs(ang)*0.8)
