@@ -104,7 +104,7 @@ class LineFollower(Node):
         # ------------------ State Variables & Timer ------------------
         
         # Default controls: drive straight slowly
-        self.target_speed = 0.15
+        self.target_speed = 0.3
         self.target_turn = 0.0
 
         # State variables (You can add your own state flags / state machines here)
@@ -125,10 +125,13 @@ class LineFollower(Node):
         self.signboard_visible=0
         self.stick_to_lane=False
         self.path_width=0.5
+        self.pending_turn=""
+
 
         # buffer/debounce state for sign-board direction matching
         self.sign_candidate=None
         self.sign_candidate_count=0
+
         
 
 
@@ -155,6 +158,18 @@ class LineFollower(Node):
     def edge_vectors_callback(self, message):
         if self.avoid:
             return
+        if self.pending_turn!="" and message.vector_count == 2:
+            m1=math.atan((message.vector_1[1].y-message.vector_1[0].y)/(message.vector_1[1].x-message.vector_1[0].x))/(PI/2) if (message.vector_1[1].y-message.vector_1[0].y)!=0 else 0
+            m2=math.atan((message.vector_2[1].y-message.vector_2[0].y)/(message.vector_2[1].x-message.vector_2[0].x))/(PI/2) if (message.vector_2[1].y-message.vector_2[0].y)!=0 else 0
+        elif(message.vector_count == 1):
+            vec= message.vector_1 if message.vector_1 else message.vector_2
+            m1=math.atan((vec[1].y-vec[0].y)/(vec[1].x-vec[0].x))/(PI/2) if (vec[1].y-vec[0].y)!=0 else 0
+        else:
+            m1,m2=0,0
+        if (abs(m1)>0.6)or(abs(m2)>0.6):
+            self.direction=self.pending_turn
+            self.pending_turn=""
+            self.stick_to_lane=True
         if self.stick_to_lane :
             farpoint = None
 
@@ -163,8 +178,9 @@ class LineFollower(Node):
                     farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
                     dx = farpoint.x - message.image_width / 2
                 elif message.vector_count == 2:
-                    if (message.vector_1[0].x- message.image_width / 2)*(message.vector_2[0].x- message.image_width / 2)<0:
-                        farpoint = message.vector_1[0] if (message.vector_1[0].x- message.image_width / 2)<0 else message.vector_2[0]
+                    if (message.vector_1[0].x- message.image_width / 2)<(message.vector_2[0].x- message.image_width / 2):
+                        farpoint = message.vector_1[0] 
+                    else: farpoint = message.vector_2[0]
                     
                 if farpoint is not None:
                     dx = farpoint.x - message.image_width / 2
@@ -186,14 +202,16 @@ class LineFollower(Node):
                     dx = farpoint.x - message.image_width / 2
                     dy = message.image_height - farpoint.y
                 elif message.vector_count == 2:
-                    if (message.vector_1[0].x- message.image_width / 2)*(message.vector_2[0].x- message.image_width / 2)<0:
-                        farpoint = message.vector_1[0] if (message.vector_1[0].x-message.image_width / 2)>0 else message.vector_2[0]
-                        dy = message.image_height - farpoint.y
-                        if dy == 0: return
+                    if (message.vector_1[0].x- message.image_width / 2)>(message.vector_2[0].x- message.image_width / 2):
+                        farpoint = message.vector_1[0] 
+                    else: farpoint = message.vector_2[0] 
+                    
                 if farpoint is not None: 
                     dx = farpoint.x - message.image_width / 2
                     if dx>0:
                         ofs=dx-self.path_width/5
+                        dy = message.image_height - farpoint.y
+                        if dy == 0: return
                         ang = -math.atan(ofs/dy) / (PI/2)
                         angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
                         speed=(1-abs(ang)*0.8)
@@ -209,10 +227,9 @@ class LineFollower(Node):
         if message.vector_count==0:
             self.lost_count = self.lost_count + 1
             decay = min(self.lost_count/10, 1.0)
-            dirn = 0.0
-            if self.stick_to_lane:
-                dirn = 1.0 if self.direction=="Left" else (-1.0 if self.direction=="Right" else 0.0)
+            dirn = 1.0 if self.direction=="Left" else (-1.0 if self.direction=="Right" else 0.0)
             angle = self.expconst * decay * dirn + (1 - self.expconst) * self.target_turn
+            self.rover_move_manual_mode(self.target_speed, angle)
             self.rover_move_manual_mode(self.target_speed, angle)
         elif message.vector_count == 1:
             farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
@@ -453,9 +470,9 @@ class LineFollower(Node):
             if self.sign_candidate_count < 3:
                 return
 
-            self.direction = direction
-            self.stick_to_lane = True
-            self.get_logger().info(f"sticking to: {self.direction}")
+            self.pending_turn = direction
+           
+            self.get_logger().info(f"pending turn: {self.direction}")
 
         pass
 
