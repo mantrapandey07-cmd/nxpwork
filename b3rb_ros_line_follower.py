@@ -126,6 +126,9 @@ class LineFollower(Node):
         self.stick_to_lane=False
         self.path_width=0.5
         self.pending_turn=""
+        self.turn_till=4
+        self.timee=0
+        self.expconst3=0.1
 
 
         # buffer/debounce state for sign-board direction matching
@@ -171,45 +174,47 @@ class LineFollower(Node):
             self.direction=self.pending_turn
             self.pending_turn=""
             self.stick_to_lane=True
+            self.timee= self.get_clock().now().nanoseconds / 1e9
+            
         if self.stick_to_lane :
             farpoint = None
-
-            if self.direction=="Left":
-                if message.vector_count == 1:
-                    farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
-                    dx = farpoint.x - message.image_width / 2
-                elif message.vector_count == 2:
-                    if (message.vector_1[0].x- message.image_width / 2)<(message.vector_2[0].x- message.image_width / 2):
-                        farpoint = message.vector_1[0] 
-                    else: farpoint = message.vector_2[0]
-                    
-                if farpoint is not None:
-                    dx = farpoint.x - message.image_width / 2
-                    dy = message.image_height - farpoint.y
-                    if dy == 0: return
-                    if dx<0:
+            if self.timee+self.turn_till>self.get_clock().now().nanoseconds/ 1e9:
+                if self.direction=="Left":
+                    if message.vector_count == 1:
+                        farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
+                        dx = farpoint.x - message.image_width / 2
+                    elif message.vector_count == 2:
+                        if (message.vector_1[0].x- message.image_width / 2)<(message.vector_2[0].x- message.image_width / 2):
+                            farpoint = message.vector_1[0] 
+                        else: farpoint = message.vector_2[0]
+                        
+                    if farpoint is not None:
+                        dx = farpoint.x - message.image_width / 2
+                        dy = message.image_height - farpoint.y
+                        if dy == 0: return
+                        
                         ofs=dx+self.path_width/5
                         ang = -math.atan(ofs/dy) / (PI/2)
                         angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
                         speed=(1-abs(ang)*0.8)
-                        spd = speed*self.expconst +(1-self.expconst)*self.target_speed
+                        spd = speed*self.expconst +(1-self.expconst3)*self.target_speed
                         self.rover_move_manual_mode(spd, angle)
                         return
                     
 
-            if self.direction=="Right":
-                if message.vector_count == 1:
-                    farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
-                    dx = farpoint.x - message.image_width / 2
-                    dy = message.image_height - farpoint.y
-                elif message.vector_count == 2:
-                    if (message.vector_1[0].x- message.image_width / 2)>(message.vector_2[0].x- message.image_width / 2):
-                        farpoint = message.vector_1[0] 
-                    else: farpoint = message.vector_2[0] 
-                    
-                if farpoint is not None: 
-                    dx = farpoint.x - message.image_width / 2
-                    if dx>0:
+                if self.direction=="Right":
+                    if message.vector_count == 1:
+                        farpoint = message.vector_1[0] if message.vector_1 else message.vector_2[0]
+                        dx = farpoint.x - message.image_width / 2
+                        dy = message.image_height - farpoint.y
+                    elif message.vector_count == 2:
+                        if (message.vector_1[0].x- message.image_width / 2)>(message.vector_2[0].x- message.image_width / 2):
+                            farpoint = message.vector_1[0] 
+                        else: farpoint = message.vector_2[0] 
+                        
+                    if farpoint is not None: 
+                        dx = farpoint.x - message.image_width / 2
+                        
                         ofs=dx-self.path_width/5
                         dy = message.image_height - farpoint.y
                         if dy == 0: return
@@ -219,6 +224,8 @@ class LineFollower(Node):
                         spd = speed*self.expconst +(1-self.expconst)*self.target_speed
                         self.rover_move_manual_mode(spd, angle)
                         return
+            else:
+                self.stick_to_lane=False
                 
 
                         
@@ -443,7 +450,7 @@ class LineFollower(Node):
         candidates = [e for e in entries if e[0] in ("Left", "Right", "Straight")]
         if (not candidates) or ( destentry is None):
             if DEBUG_LOG:
-                self.get_logger().info(f"[DEBUG_LOG] sign_board_callback: no usable match, entries={entries} destination={self.destination}")
+                self.get_logger().info(f"[DEBUG_LOG] sign_board_callback: no usable match, entries={entries} destination={self.destination}, direction ={self.pending_turn}")
             return
         nearest = min(candidates, key=lambda e: abs(e[1] - destentry[1]))
         if DEBUG_LOG:
