@@ -30,6 +30,19 @@ SPEED_MAX = 1.0
 TURN_MIN = -1.0
 TURN_MAX = 1.0
 
+# Sign convention for the override (sign-board-directed) turn below is assumed
+# to match the header comment: positive turn = left steer, negative = right
+# steer. If testing shows a matched "Right" sign actually turns the buggy
+# LEFT in sim (cerebri interpreting the Joy axis oppositely), flip this to
+# -1.0 -- the sign-matching logic itself is already choosing the correct
+# label (verified against your log), so don't touch that part.
+TURN_SIGN_POLARITY = 1.0
+
+# Floor speed used specifically during a sharp/sign-directed turn -- lower
+# than the normal cruise floor so sharp corners don't carry enough momentum
+# to drift off the white lane.
+SHARP_TURN_MIN_SPEED = 0.08
+
 # CONFIGURATION:
 # The buggy is driven in manual mode by publishing standard controller Joy messages to /cerebri/in/joy.
 # The layout is: msg.axes = [0.0, speed, 0.0, turn]
@@ -108,7 +121,11 @@ class LineFollower(Node):
         self.avoid = False
         self.patient_id = None
         self.hospital_id = None
-        self.destination = None
+        # TEST OVERRIDE: seeded to "X" (instead of None) so sign_board_callback
+        # has an initial destination to match against for testing turn logic
+        # without waiting on the full QR -> server -> ack round trip first.
+        # Set back to None for a real mission run.
+        self.destination = "X"
         self.mission_completed = False
         self.approaching = False
         self.qr_data = ""
@@ -160,8 +177,13 @@ class LineFollower(Node):
             return
         if self.get_clock().now().nanoseconds * (10 ** (-9)) < self.override_till:
             ang = 0.7 if self.direction == "Left" else -0.7
+            ang *= TURN_SIGN_POLARITY
             self.target_turn = self.expconst * ang + (1 - self.expconst) * self.target_turn
-            self.target_speed = max(self.target_speed * 0.7, 0.15)
+            # Cut speed harder the sharper we're actually steering right now,
+            # instead of a flat 0.7 factor -- a nearly-full turn command should
+            # slow the buggy a lot more than a shallow one.
+            turn_severity = min(abs(self.target_turn), 1.0)
+            self.target_speed = max(self.target_speed * (1.0 - 0.6 * turn_severity), SHARP_TURN_MIN_SPEED)
             return
         if message.vector_count == 0:
             self.lost_count = self.lost_count + 1
@@ -178,7 +200,11 @@ class LineFollower(Node):
             ang = math.atan(dx / dy) / (PI / 2) if abs(math.atan(dx / dy) / (PI / 2)) > 0.2 else 0
             angle = self.expconst * ang + (1 - self.expconst) * self.target_turn
             if not self.approaching:
-                speed = (1 - abs(ang) * 0.8)
+                # Steeper-than-linear cut so sharp curves slow down a lot
+                # more than shallow ones -- flat 0.8 was letting sharp turns
+                # through at nearly full speed and the buggy drifted off the
+                # white lane.
+                speed = max(1 - abs(ang) * 1.3, SHARP_TURN_MIN_SPEED)
 
                 spd = speed * self.expconst + (1 - self.expconst) * self.target_speed
             else:
@@ -196,7 +222,7 @@ class LineFollower(Node):
             ang = math.atan(dx / dy) / (PI / 2)
             angle = -self.expconst2 * ang + (1 - self.expconst2) * self.target_turn
             if not self.approaching:
-                speed = (1 - abs(ang) * 0.8)
+                speed = max(1 - abs(ang) * 1.3, SHARP_TURN_MIN_SPEED)
                 spd = speed * self.expconst2 + (1 - self.expconst2) * self.target_speed
             else:
                 spd = self.target_speed
@@ -430,6 +456,11 @@ class LineFollower(Node):
 
         candidates = [e for e in entries if e[0] in ("Left", "Right", "Straight")]
         if not candidates:
+            return
+        if destentry is None:
+            self.get_logger().warn(
+                f"No sign entry matches current destination '{self.destination}' — "
+                f"skipping turn selection for this frame.")
             return
         nearest = min(candidates, key=lambda e: abs(e[1] - destentry[1]))
         if abs(nearest[1] - destentry[1]) < 0.1:
