@@ -116,7 +116,7 @@ class LineFollower(Node):
         self.approaching=False
         self.qr_data=""
         self.expconst=0.4
-        self.expconst2=0.2
+        self.expconst2=0.4
         self.reached=False
         self.direction=""
         self.lost_count=0
@@ -128,7 +128,6 @@ class LineFollower(Node):
         self.pending_turn=""
         self.turn_till=0.8
         self.timee=0
-        self.expconst3=0.1
 
 
         # buffer/debounce state for sign-board direction matching
@@ -170,11 +169,12 @@ class LineFollower(Node):
             m2=0
         else:
             m1,m2=0,0
-        if ((abs(m1)>0.3)or(abs(m2)>0.3)) and self.pending_turn!="Straight":
-            self.direction=self.pending_turn
-            self.pending_turn=""
-            self.stick_to_lane=True
-            self.timee= self.get_clock().now().nanoseconds / 1e9
+        if self.pending_turn not in ("", "Straight"):
+            if message.vector_count == 1 or (abs(m1) > 0.3 or abs(m2) > 0.3):
+                self.direction = self.pending_turn
+                self.pending_turn = ""
+                self.stick_to_lane = True
+                self.timee = self.get_clock().now().nanoseconds / 1e9
             
         if self.stick_to_lane :
             farpoint = None
