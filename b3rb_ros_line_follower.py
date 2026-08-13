@@ -397,7 +397,7 @@ class LineFollower(Node):
         entries=[]
         for e in message.data.split(";"):
             parts = e.split(":")
-            entries.append([parts[0]``, float(parts[1])])
+            entries.append([parts[0], float(parts[1])])
         destentry=None
         for e in entries :
             if e[0]==self.destination: destentry= e 
