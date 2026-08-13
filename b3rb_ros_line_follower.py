@@ -158,15 +158,16 @@ class LineFollower(Node):
     def edge_vectors_callback(self, message):
         if self.avoid:
             return
-        if self.pending_turn!="" and message.vector_count == 2:
+        if self.pending_turn!="" and message.vector_count == 2 and self.pending_turn!="Straight":
             m1=math.atan((message.vector_1[1].x-message.vector_1[0].x)/(message.vector_1[1].y-message.vector_1[0].y))/(PI/2) if (message.vector_1[1].y-message.vector_1[0].y)!=0 else 0
             m2=math.atan((message.vector_2[1].x-message.vector_2[0].x)/(message.vector_2[1].y-message.vector_2[0].y))/(PI/2) if (message.vector_2[1].y-message.vector_2[0].y)!=0 else 0
-        elif(self.pending_turn!="" and message.vector_count == 1):
+        elif(self.pending_turn!="" and message.vector_count == 1 and self.pending_turn!="Straight"):
             vec= message.vector_1 if message.vector_1 else message.vector_2
             m1=math.atan((vec[1].x-vec[0].x)/(vec[1].y-vec[0].y))/(PI/2) if (vec[1].y-vec[0].y)!=0 else 0
+            m2=0
         else:
             m1,m2=0,0
-        if (abs(m1)>0.5)or(abs(m2)>0.5):
+        if (abs(m1)>0.3)or(abs(m2)>0.3):
             self.direction=self.pending_turn
             self.pending_turn=""
             self.stick_to_lane=True
