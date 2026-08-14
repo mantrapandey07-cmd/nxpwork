@@ -170,7 +170,7 @@ class LineFollower(Node):
         else:
             m1,m2=0,0
         if self.pending_turn not in ("", "Straight"):
-            if message.vector_count == 1:
+            if abs(m1) > 0.3 or abs(m2) > 0.3:
                 self.direction = self.pending_turn
                 self.pending_turn = ""
                 self.stick_to_lane = True
