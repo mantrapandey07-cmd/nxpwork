@@ -126,7 +126,7 @@ class LineFollower(Node):
         self.stick_to_lane=False
         self.path_width=0.5
         self.pending_turn=""
-        self.turn_till=0.8
+        self.turn_till=6
         self.timee=0
 
 
@@ -170,7 +170,7 @@ class LineFollower(Node):
         else:
             m1,m2=0,0
         if self.pending_turn not in ("", "Straight"):
-            if message.vector_count == 1 or (abs(m1) > 0.3 or abs(m2) > 0.3):
+            if message.vector_count == 1:
                 self.direction = self.pending_turn
                 self.pending_turn = ""
                 self.stick_to_lane = True
@@ -200,6 +200,9 @@ class LineFollower(Node):
                             spd = speed*self.expconst +(1-self.expconst)*self.target_speed
                             self.rover_move_manual_mode(spd, angle)
                             return
+                        else: return
+                        
+                            
                     
 
                 if self.direction=="Right":
@@ -225,6 +228,7 @@ class LineFollower(Node):
                             spd = speed*self.expconst +(1-self.expconst)*self.target_speed
                             self.rover_move_manual_mode(spd, angle)
                             return
+                        else: return
             else:
                 self.stick_to_lane=False
                 
@@ -296,7 +300,7 @@ class LineFollower(Node):
         sector= right_sector if min(right_sector)<min(left_sector) else left_sector
         if not self.approaching:
             if min(sector)<0.8:
-                spd =min(self.target_speed,min(sector)*self.expconst/0.8 +(1-self.expconst)*self.target_speed)
+                spd =min(self.target_speed ,min(sector)*self.expconst/0.8 +(1-self.expconst)*self.target_speed)
                 self.avoid=True
                 if sector==right_sector :
                     lowerbound=n*7/18
